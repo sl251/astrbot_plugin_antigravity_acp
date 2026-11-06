@@ -3,9 +3,19 @@
 ## 状态
 
 - 接口基线：AstrBot v4.29.4，原生部署优先。
-- 已做：源码接口核对、Ruff 静态检查/格式化、Python 编译/语法、配置 JSON 解析与差异空白检查。
-- 未做：单元/模拟 ACP 测试、安装运行、真实 AGY 聊天及三平台验证。
-- 实现工作区没有 AGY CLI 或登录态。不要把编译通过写成真实可用。
+- 已做：源码接口核对、离线输入契约与模拟 ACP 子进程回归测试、Ruff 静态检查/格式化、Python 编译/语法、配置 JSON 解析与差异空白检查。
+- 仓库回归命令：`python -m unittest discover -s tests -v`。测试不依赖 AstrBot、AGY 账号或第三方 pip 包。
+- 回归包含：200/2000 帧突发输出有序完整、慢消费者队列上限、暂停消费时权限拒绝与 RPC 返回；忽略 SIGTERM、回收途中取消/重复取消、Runtime 停用与空闲回收竞态；输入校验和历史预算。
+- 未做：完整 AstrBot 安装/WebUI、真实 AGY 聊天及 Windows/macOS 运行验证；进程树测试中的 POSIX 信号场景在 Windows 跳过。
+- 单独核查过 AGY 1.5.2 的参数帮助与真实 ACP initialize v1；session/new 未成功，错误脱敏分类匹配 authentication，因此没有真实模型目录/生成通过的结论。未发送真实 prompt，不把模拟测试写成真实账号可用。
+
+### 本次修复验证记录
+
+- 环境：Linux x86_64、Python 3.11.2；Ruff 0.17.4。
+- 仓库内 21 项回归全部通过，另以 `PYTHONASYNCIODEBUG=1` 和 `-W error` 运行通过。
+- 审查时另有 31 项临时离线契约测试通过，包括 20 轮会话复用、历史编辑重建、取消/超时清理、Provider 返回值与注册生命周期；与仓库测试有重叠，不作为 52 个独立验收场景。
+- 原始缺陷脚本复测：突发 200 个通知收到全部 200 个片段并完成；空闲回收与停用竞态结束后进程已被 SIGKILL 回收。原脚本关闭等待预算由 2 秒调至 6 秒，以容纳未修改的 3 秒 TERM 宽限，不改变运行代码阈值。
+- `ruff check .`、`ruff format --check .`、`compileall`、配置 JSON 解析及 `git diff --check` 通过。
 
 建议顺序：纯 Python 消息/配置层 → fake_agy 进程与会话层 → 真实 AstrBot 插件/WebUI → 官方 CLI 最小联调 → 多轮与异常竞态。测试方可新增测试代码及必要修复，请记录真实结果。
 

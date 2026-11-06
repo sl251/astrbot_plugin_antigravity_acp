@@ -45,6 +45,27 @@ async def spawn(argv: list[str], cwd: Path | None = None):
 
 
 async def stop_process(proc: asyncio.subprocess.Process) -> None:
+    # Session/client close can drop their last process reference on cancellation.
+    # Shield the *entire* shutdown, including Windows taskkill, and keep owning it
+    # until it finishes. A lone shield would leave background cleanup behind;
+    # an unshielded second await would let a repeated cancel interrupt SIGKILL.
+    cleanup = asyncio.create_task(_stop_process(proc), name="agy:stop-process")
+    cancelled = None
+    while True:
+        try:
+            await asyncio.shield(cleanup)
+            break
+        except asyncio.CancelledError as exc:
+            cancelled = cancelled or exc
+            if cleanup.done():
+                break
+    # Retrieve the result so no cleanup exception/task is abandoned.
+    cleanup.result()
+    if cancelled is not None:
+        raise cancelled
+
+
+async def _stop_process(proc: asyncio.subprocess.Process) -> None:
     # Own process group only. Windows uses taskkill /T for descendants.
     if os.name == "posix":
         try:

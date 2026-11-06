@@ -177,6 +177,13 @@ class AcpClient:
                             future.set_exception(remote_error(obj["error"]))
                         else:
                             future.set_result(obj.get("result"))
+                # readline() may complete synchronously for a whole buffered
+                # burst. Give generate() and cancellation/control tasks a turn
+                # before accepting another frame. Never await queue space here:
+                # that would block RPC replies and permission rejection behind
+                # a paused consumer. A truly stalled consumer still hits the
+                # bounded queue and fails closed below.
+                await asyncio.sleep(0)
             self._fail(
                 AgyError("TRANSPORT", "AGY 进程退出或关闭了输出管道，请检查 CLI。")
             )

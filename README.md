@@ -2,7 +2,7 @@
 
 将本机已登录的官方 Google Antigravity CLI（agy）通过 ACP / stdio 接入 AstrBot，作为可选主聊天模型。**默认原生部署，不依赖 Docker，也不需要额外 HTTP 服务。**
 
-> v0.1.0 开发版：实现已完成，功能测试和真实账号联调待执行。接口基线为 AstrBot **v4.29.4**；不把“最新版”视为已验证兼容。见[测试交接](docs/TEST_HANDOFF.md)。
+> v0.1.0 开发版：已加入离线单元与模拟 ACP 回归测试，真实 AstrBot 安装、账号联调及跨平台验证仍待执行。接口基线为 AstrBot **v4.29.4**；不把“最新版”视为已验证兼容。见[测试交接](docs/TEST_HANDOFF.md)。
 
 ## 首版能力
 
@@ -93,5 +93,4 @@ data/plugin_data/astrbot_plugin_agy_provider/ 下的独立目录保存本会话 
 - [测试交接与协议契约](docs/TEST_HANDOFF.md)
 - [第三方参考与许可](THIRD_PARTY_NOTICES.md)
 
-基础静态检查：python -m compileall -q . 和 git diff --check。功能、真实登录及平台兼容测试由后续测试方执行；静态检查不等于运行验收。
-
+离线回归：`python -m unittest discover -s tests -v`；基础静态检查：`python -m compileall -q .` 和 `git diff --check`。模拟 ACP 测试不使用账号、不调用模型；真实登录、AstrBot 完整安装和平台兼容仍须单独验证。
