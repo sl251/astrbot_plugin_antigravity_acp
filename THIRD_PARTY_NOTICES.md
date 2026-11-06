@@ -5,7 +5,19 @@ The Python implementation was authored for this repository. ACP transport, isola
 - [lili-luo/dsh-plugin-bundle](https://github.com/lili-luo/dsh-plugin-bundle), commit `b8989f976fed7ab84fba267853a6dc92bf7c64e4`, `dsh-llm-antigravity-acp/src/{acp-process,preflight,conversation,runtime}.ts`.
 - [AstrBot](https://github.com/AstrBotDevs/AstrBot/tree/v4.29.4) provider APIs and plugin lifecycle (runtime dependency; not bundled).
 
-No DSH runtime or compiled JavaScript is bundled. The reference project's copyright and MIT license are retained below for the adapted configuration and protocol patterns:
+No DSH runtime or compiled JavaScript is bundled.
+
+M0 protocol/design review additionally consulted ACP v1 schema at
+[`7ec5185c18ca928b48e457d2d8a163800be013c8`](https://github.com/agentclientprotocol/agent-client-protocol/tree/7ec5185c18ca928b48e457d2d8a163800be013c8),
+the official AGY documentation repository at
+[`e186eb5819bc33ce2d9e26420f30f30ae289b1a5`](https://github.com/google-antigravity/antigravity-cli/tree/e186eb5819bc33ce2d9e26420f30f30ae289b1a5),
+and AstrBot v4.29.4 at
+[`61335414433db721b3f7ecc93f90deafe0a59d78`](https://github.com/AstrBotDevs/AstrBot/tree/61335414433db721b3f7ecc93f90deafe0a59d78).
+These are linked references only; their source, schemas, binaries and account data
+are not vendored. No new runtime dependency is introduced.
+
+The DSH reference project's copyright and MIT license are retained below for the
+adapted configuration and protocol patterns:
 
 ```text
 MIT License

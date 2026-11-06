@@ -12,9 +12,16 @@ class AgyError(RuntimeError):
 def remote_error(error: object) -> AgyError:
     # Inspect transiently for classification; never propagate upstream text.
     text = str(error).lower()
-    if re.search(r"unauth|not.logged.in|sign.in|login|credential|\b401\b", text):
+    auth_required = isinstance(error, dict) and error.get("code") == -32000
+    if auth_required or re.search(
+        r"authentication.required|unauth|not.logged.in|sign.in|login|credential|\b401\b",
+        text,
+    ):
         return AgyError(
-            "AUTH", "请用运行 AstrBot 的同一系统用户在终端执行 agy 完成登录。"
+            "AUTH",
+            "请用运行 AstrBot 的同一系统用户执行官方 agy 登录。"
+            "若普通 CLI 已登录而隔离 session/new 仍失败，请检查隔离目录对应的"
+            "官方认证后端/搜索路径；不要复制其他用户凭据或关闭配置隔离。",
         )
     if re.search(r"quota|exhaust|capacity|usage.limit", text):
         return AgyError("QUOTA", "AGY 额度不足或容量不可用，请检查官方 CLI。")
