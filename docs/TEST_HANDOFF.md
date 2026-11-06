@@ -1,5 +1,13 @@
 # 测试交接
 
+## M0 首批交付（当前）
+
+- 设计与后续真实测试步骤见 [TOOL_BRIDGE_DESIGN.md](TOOL_BRIDGE_DESIGN.md)。路线 B 为待验证主路线，M0 尚未放行，工具/图片继续关闭。
+- 本次环境：Linux x86_64、Python 3.12.14、Ruff 0.17.4；未安装 AGY 或启动 AstrBot，无测试账号。预检在 discovery 返回 NOT_INSTALLED，未发送模型 prompt。
+- 基线复现 `Authentication required` → UPSTREAM；本次修正为 AUTH，兼容 ACP -32000，错误原文不回显。
+- 既有 21 项加 4 项短契约测试共 25 项通过（约 1 秒）；预检成功/认证失败路径为 mock，不能当作真实 ACP 成功。Ruff、编译、配置 JSON 和 diff 检查通过。
+- 使用者指定复杂测试交由其他模型完成：真实 echo/runner、认证刷新、多轮/并发/跨平台与独立审查均未做；不得将本节理解为 M0/M1/M2 验收完成。
+
 ## 状态
 
 - 接口基线：AstrBot v4.29.4，原生部署优先。

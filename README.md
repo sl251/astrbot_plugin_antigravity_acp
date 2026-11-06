@@ -90,8 +90,14 @@ data/plugin_data/astrbot_plugin_agy_provider/ 下的独立运行目录保存本�
 
 - [实施计划](docs/PLAN.md)
 - [下一阶段任务书：工具调用、多模态与可靠认证](docs/NEXT_PHASE_TASKBOOK.md)
+- [M0 工具桥决策与预检交接](docs/TOOL_BRIDGE_DESIGN.md)（真实协议决策门尚未通过）
 - [测试矩阵](docs/TEST_MATRIX.md)
 - [测试交接与协议契约](docs/TEST_HANDOFF.md)
 - [第三方参考与许可](THIRD_PARTY_NOTICES.md)
 
 离线回归：`python -m unittest discover -s tests -v`；基础静态检查：`python -m compileall -q .` 和 `git diff --check`。模拟 ACP 测试不使用账号、不调用模型；真实登录、AstrBot 完整安装和平台兼容仍须单独验证。
+
+不生成内容的隔离预检：`python -m agy_provider.probe`，可加 `--command /absolute/path/to/agy`。
+输出仅含脱敏阶段、错误代码和白名单能力，退出 0 表示建会话成功，退出 2 表示阻塞；不证明工具或图片可用。
+`Authentication required` / ACP `-32000` 现在归类为 `AUTH`：普通 CLI 已登录仍失败时，应检查隔离认证搜索路径。
+本次无配置迁移、新运行依赖或新能力开关，认证存储与刷新适配仍待 M1。
