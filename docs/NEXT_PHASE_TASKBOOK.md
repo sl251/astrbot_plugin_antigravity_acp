@@ -81,6 +81,8 @@
 
 仅在 AGY 确认支持该 transport/配置时采用。优先 stdio 或仅本机受保护传输，不默认新增公网端口。MCP 调用须进入宿主统一的授权/执行上下文，不可直接调用任意 Python 函数绕过 runner。若需 runner/executor 适配，应明确兼容入口、维护成本、调用与结果的持久历史语义。
 
+候选时序为 `AGY MCP call → 会话级桥 → 宿主授权/执行 → MCP result → 原 session/prompt 继续`：这是保持原调用等待，不是协议级暂停/恢复。若需要交回 AstrBot 原生 runner，须设计 pending-call broker 及跨 Provider 请求的关联状态机；若桥接宿主 executor，须逐项列明并补齐 runner 的 hooks、调用预算、直接发消息、历史和中止语义。`func_tool` 可能是 `skills_like` 模式的轻量 schema 集，不能假设其中总有可调用 handler；续轮结果主要来自 contexts，不能只实现 `tool_calls_result` 参数。ACP 展示 ID、MCP 请求 ID、宿主 tool call ID 必须分别建模、显式关联。
+
 两条路线均不通时：交付阻塞证据、可选宿主扩展方案及代价，保留文本模式；不得用字符串伪装工具调用，或让 AGY 默认执行工具以“完成任务”。
 
 **M0 验收**：方案附成功/失败真实探针、数据流和时序图、权限边界、重入/锁分析、所需最小宿主变更；标明支持与不支持的组合。探针使用无副作用 echo 工具，不访问用户文件和账号数据。
