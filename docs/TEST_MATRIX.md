@@ -2,7 +2,7 @@
 
 > 离线回归已覆盖部分条目；下表为验收目标，未逐项标注通过。模拟 ACP 不等于真实 Google 账号测试。
 
-使用 `python -m unittest discover -s tests -v` 运行仓库内回归测试，覆盖消息/配置、突发流式输出、真实慢消费者和进程回收竞态。AstrBot WebUI、真实账号与跨平台测试仍待执行。测试入口、实际验证边界与协议契约见 [TEST_HANDOFF.md](TEST_HANDOFF.md)。
+使用 `python -m unittest discover -s tests -v` 运行仓库内回归测试，覆盖消息/配置、突发流式输出、真实慢消费者和进程回收竞态。单实例真实文本/API 联调及认证适配限制见 [TEST_HANDOFF.md](TEST_HANDOFF.md)，不代表下表全部通过；完整 WebUI 与跨平台仍待验证。下一阶段工具和图片以 [NEXT_PHASE_TASKBOOK.md](NEXT_PHASE_TASKBOOK.md) 的优先级及验收为准，本表保留首版级别作历史参考。
 
 | 类别 | 测试 | 预期结果 | 级别 |
 |---|---|---|---|

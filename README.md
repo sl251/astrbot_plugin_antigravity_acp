@@ -2,7 +2,7 @@
 
 将本机已登录的官方 Google Antigravity CLI（agy）通过 ACP / stdio 接入 AstrBot，作为可选主聊天模型。**默认原生部署，不依赖 Docker，也不需要额外 HTTP 服务。**
 
-> v0.1.0 开发版：已加入离线单元与模拟 ACP 回归测试，真实 AstrBot 安装、账号联调及跨平台验证仍待执行。接口基线为 AstrBot **v4.29.4**；不把“最新版”视为已验证兼容。见[测试交接](docs/TEST_HANDOFF.md)。
+> v0.1.0 开发版：离线回归已通过；2026-11-07 在 Linux 容器的 AstrBot **v4.29.4** / AGY 1.5.2 上，通过实例级认证路径适配完成真实文本生成和宿主模型测试。该认证适配尚未合入通用代码，刷新、工具、多模态及跨平台仍未验收；不把单实例成功视为稳定发布。见[测试交接](docs/TEST_HANDOFF.md)和[下一阶段任务书](docs/NEXT_PHASE_TASKBOOK.md)。
 
 ## 首版能力
 
@@ -21,13 +21,13 @@
 3. 确认终端中 agy --version 和 agy acp --help 可运行。服务/GUI 启动的 AstrBot 可能没有终端 PATH，此时填写插件 command 绝对路径。
 4. 把插件放到 AstrBot 数据目录的 plugins/astrbot_plugin_agy_provider/，其中直接包含 main.py、metadata.yaml 和 agy_provider/，不要再嵌套仓库目录。
 
-开发分支安装示例，在 AstrBot 根目录运行（Git 已具有该私有仓库的读取权限）：
+主分支安装示例，在 AstrBot 根目录运行（Git 已具有该私有仓库的读取权限）：
 
 ```sh
-git clone --branch feat/agy-acp-provider https://github.com/sl251/sl251-astrbot-plugin-agy-provider.git data/plugins/astrbot_plugin_agy_provider
+git clone --branch main https://github.com/sl251/sl251-astrbot-plugin-agy-provider.git data/plugins/astrbot_plugin_agy_provider
 ```
 
-仓库目前私有，AstrBot URL 安装器不一定有访问权限。也可下载开发分支 ZIP，通过 WebUI 本地安装或手工解压。不要把 GitHub token 填入 provider Key。
+仓库目前私有，AstrBot URL 安装器不一定有访问权限。也可下载主分支 ZIP，通过 WebUI 本地安装或手工解压。不要把 GitHub token 填入 provider Key。
 
 5. 重启 AstrBot，启用插件并保存插件配置。
 6. 在模型/提供商页面新增 **AGY Gemini (ACP)**（类型 agy_acp），无需 URL 或 Key。获取模型列表，选择实际返回的 Gemini ID，添加并启用模型。能力仅勾选**文本**。
@@ -74,7 +74,7 @@ git clone --branch feat/agy-acp-provider https://github.com/sl251/sl251-astrbot-
 
 新建/重建时，以带角色的 JSON 转录回放历史，再附最新问题；这与底层 Gemini API 原生多消息历史不同。只有历史前缀与此前完整轮次一致时才复用。旧历史超预算时按完整轮次移除并标记数量；当前问题不截断，超限直接报错。
 
-data/plugin_data/astrbot_plugin_agy_provider/ 下的独立目录保存本会话 agent、系统提示和 CLI 设置，AGY 可能写入自己的会话数据。正常回收删除目录；强制结束/断电可能留下文件，停止 AstrBot 后可删除该插件的数据目录。插件不输出完整 prompt 或 CLI stderr，不提取/复制登录凭据。
+data/plugin_data/astrbot_plugin_agy_provider/ 下的独立运行目录保存本会话 agent、系统提示和 CLI 设置，AGY 可能写入自己的会话数据。正常回收删除会话目录，强制结束/断电可能留下文件；停止 AstrBot 后只清理已确认的临时 runtime/session 目录。**不要整目录删除**：实例可能在同一数据树保存持久认证状态，必须区分并备份。插件不输出完整 prompt 或 CLI stderr，不提取/复制登录凭据；实例认证适配的边界见任务书。
 
 启动要求 CLI 提供 acp、--gemini-dir、--app-data-dir、--agent；不要求 --process-per-session，不依赖私有 systemPrompt 扩展或会话恢复方法。模型列表最多缓存 5 分钟，真正建会话时再次校验。
 
@@ -89,6 +89,7 @@ data/plugin_data/astrbot_plugin_agy_provider/ 下的独立目录保存本会话 
 ## 文档
 
 - [实施计划](docs/PLAN.md)
+- [下一阶段任务书：工具调用、多模态与可靠认证](docs/NEXT_PHASE_TASKBOOK.md)
 - [测试矩阵](docs/TEST_MATRIX.md)
 - [测试交接与协议契约](docs/TEST_HANDOFF.md)
 - [第三方参考与许可](THIRD_PARTY_NOTICES.md)
