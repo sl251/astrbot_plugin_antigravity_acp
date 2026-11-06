@@ -1,0 +1,68 @@
+{
+  "command": {
+    "description": "AGY 可执行文件路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空从 PATH 和 ~/.local/bin 查找；否则填写绝对路径。Windows 使用 agy.exe。不要填写参数。"
+  },
+  "thought_level": {
+    "description": "默认思考档位",
+    "type": "string",
+    "default": "default",
+    "options": [
+      "default",
+      "low",
+      "medium",
+      "high"
+    ],
+    "hint": "default 使用 CLI 模型默认值；其他值须由模型实际支持。"
+  },
+  "startup_timeout": {
+    "description": "启动/协议握手超时（秒）",
+    "type": "int",
+    "default": 60
+  },
+  "request_timeout": {
+    "description": "单轮生成超时（秒）",
+    "type": "int",
+    "default": 180
+  },
+  "queue_timeout": {
+    "description": "排队超时（秒）",
+    "type": "int",
+    "default": 60
+  },
+  "max_concurrent": {
+    "description": "每个模型实例最大并发请求",
+    "type": "int",
+    "default": 2,
+    "hint": "低内存机器建议设为 1。"
+  },
+  "max_sessions": {
+    "description": "每个模型实例最多保留会话数",
+    "type": "int",
+    "default": 4,
+    "hint": "不能小于 max_concurrent；每个保留会话对应一个独立 AGY 进程。"
+  },
+  "max_pending": {
+    "description": "每个模型实例最多排队请求数",
+    "type": "int",
+    "default": 16
+  },
+  "idle_ttl": {
+    "description": "空闲会话回收时间（秒）",
+    "type": "int",
+    "default": 600
+  },
+  "history_bytes": {
+    "description": "历史重放字节预算",
+    "type": "int",
+    "default": 160000,
+    "hint": "范围 4096–160000；优先保留最新输入，省略旧记录时记录数量。"
+  },
+  "max_output_bytes": {
+    "description": "单轮正文与思考合计字节上限",
+    "type": "int",
+    "default": 4194304
+  }
+}

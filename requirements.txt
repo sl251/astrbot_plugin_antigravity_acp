@@ -1,0 +1,1 @@
+# No additional Python packages. Uses the AstrBot host and Python 3.11+ stdlib.

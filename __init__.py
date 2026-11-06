@@ -1,0 +1,1 @@
+"""AstrBot AGY provider plugin."""

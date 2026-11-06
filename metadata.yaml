@@ -1,0 +1,7 @@
+name: astrbot_plugin_agy_provider
+display_name: AGY Gemini Provider
+desc: 通过本机已登录的官方 AGY CLI，将 Gemini 作为 AstrBot 原生文本模型使用，无需 Docker。
+version: v0.1.0
+author: sl251
+repo: https://github.com/sl251/sl251-astrbot-plugin-agy-provider
+astrbot_version: ">=4.29.4,<5"
