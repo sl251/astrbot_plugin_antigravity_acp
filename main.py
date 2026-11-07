@@ -7,6 +7,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.provider import register as registry
 
 from .agy_provider.config import Settings
+from .agy_provider.host_compat import install_host_compat, uninstall_host_compat
 from .agy_provider.provider import (
     DEFAULT_CONFIG,
     OWNER,
@@ -60,6 +61,12 @@ class AgyProviderPlugin(Star):
             provider_display_name="AGY Gemini (ACP)",
         )(AgyProvider)
         self.registered = True
+        try:
+            install_host_compat(owner=OWNER, logger=logger)
+        except Exception:
+            unregister_owned_adapter()
+            self.registered = False
+            raise
         manager = self.context.provider_manager
         # Startup: ProviderManager.initialize follows plugin initialization.
         # Hot reload / re-enable: restore only instances this plugin removed.
@@ -78,14 +85,17 @@ class AgyProviderPlugin(Star):
     async def terminate(self):
         if not self.registered:
             return
-        manager = self.context.provider_manager
-        restore_ids = set(getattr(manager, RESTORE_IDS, set()))
-        async with manager.reload_lock:
-            for provider_id, provider in list(manager.inst_map.items()):
-                if getattr(provider, "agy_plugin_owner", None) == OWNER:
-                    restore_ids.add(provider_id)
-                    await manager.terminate_provider(provider_id)
-        setattr(manager, RESTORE_IDS, restore_ids)
-        await terminate_all()
-        unregister_owned_adapter()
-        self.registered = False
+        try:
+            manager = self.context.provider_manager
+            restore_ids = set(getattr(manager, RESTORE_IDS, set()))
+            async with manager.reload_lock:
+                for provider_id, provider in list(manager.inst_map.items()):
+                    if getattr(provider, "agy_plugin_owner", None) == OWNER:
+                        restore_ids.add(provider_id)
+                        await manager.terminate_provider(provider_id)
+            setattr(manager, RESTORE_IDS, restore_ids)
+            await terminate_all()
+        finally:
+            uninstall_host_compat()
+            unregister_owned_adapter()
+            self.registered = False

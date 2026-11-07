@@ -11,7 +11,6 @@ import os
 import unittest
 from types import SimpleNamespace
 
-import agy_provider.tools as tools_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.process import stop_process
@@ -110,48 +109,39 @@ class ToolSchemaTests(unittest.TestCase):
             tool("dup_probe"),
             tool("disabled", active=False),
         )
-        self.assertEqual(list(snap.to_wire), ["good_probe", "dup_probe"])
-        self.assertEqual(len(snap.tools), 2)
-        self.assertEqual(len(snap.skipped), 3)
-        self.assertTrue(snap.skipped[0].startswith("echo_probe: "))
+        self.assertEqual(list(snap.to_wire), ["echo_probe", "good_probe", "dup_probe"])
+        self.assertEqual(len(snap.tools), 3)
+        self.assertEqual(len(snap.skipped), 2)
         self.assertTrue(any("dup_probe" in item for item in snap.skipped))
         self.assertTrue(any("bad_schema_probe" in item for item in snap.skipped))
 
-    def test_all_tools_unusable_equals_no_tools(self):
+    def test_schema_only_tool_is_bridged_without_handler(self):
+        # Native providers consume schemas, not executable callbacks. AstrBot
+        # owns the raw ToolSet, including skills_like placeholder replacement.
         snap = snapshot(tool(handler=False))
-        self.assertEqual(snap.tools, [])
-        self.assertEqual(len(snap.skipped), 1)
-        self.assertIn("无可调用宿主 handler", snap.skipped[0])
+        self.assertEqual(snap.to_wire, {"echo_probe": "echo_probe"})
+        self.assertEqual(snap.skipped, [])
 
-    def test_handoff_tool_without_handler_is_bridged(self):
-        class FakeHandoffTool(SimpleNamespace):
-            pass
+    def test_run_based_voice_tool_is_bridged_without_execution(self):
+        class VoiceTool(SimpleNamespace):
+            async def call(self, context, **kwargs):
+                raise AssertionError("Only AstrBot may call the tool")
 
-        original_types = tools_module._HOST_EXECUTABLE_TOOL_TYPES
-        try:
-            tools_module._HOST_EXECUTABLE_TOOL_TYPES = (FakeHandoffTool,)
-            handoff = FakeHandoffTool(**vars(tool("transfer_to_ops", handler=False)))
-            snap = snapshot(handoff)
-            self.assertEqual(snap.to_wire, {"transfer_to_ops": "transfer_to_ops"})
-            self.assertEqual(snap.tools[0]["inputSchema"], SCHEMA)
-            self.assertEqual(snap.skipped, [])
-        finally:
-            tools_module._HOST_EXECUTABLE_TOOL_TYPES = original_types
+            async def run(self, event, **kwargs):
+                raise AssertionError("Only AstrBot may run the tool")
 
-    def test_mcp_tool_without_handler_is_bridged(self):
-        class FakeMCPTool(SimpleNamespace):
-            pass
+        voice = VoiceTool(**vars(tool("mimo_tts_speak", handler=False)))
+        snap = snapshot(voice)
+        self.assertEqual(snap.to_wire, {"mimo_tts_speak": "mimo_tts_speak"})
+        self.assertEqual(snap.skipped, [])
 
-        original_types = tools_module._HOST_EXECUTABLE_TOOL_TYPES
-        try:
-            tools_module._HOST_EXECUTABLE_TOOL_TYPES = (FakeMCPTool,)
-            mcp = FakeMCPTool(**vars(tool("remote_probe", handler=False)))
-            snap = snapshot(mcp)
-            self.assertEqual(snap.to_wire, {"remote_probe": "remote_probe"})
-            self.assertEqual(snap.tools[0]["inputSchema"], SCHEMA)
-            self.assertEqual(snap.skipped, [])
-        finally:
-            tools_module._HOST_EXECUTABLE_TOOL_TYPES = original_types
+    def test_handoff_and_mcp_schemas_need_no_type_allowlist(self):
+        for name in ("transfer_to_ops", "remote_probe"):
+            with self.subTest(name=name):
+                snap = snapshot(tool(name, handler=False))
+                self.assertEqual(snap.to_wire, {name: name})
+                self.assertEqual(snap.tools[0]["inputSchema"], SCHEMA)
+                self.assertEqual(snap.skipped, [])
 
     def test_gemini_array_items_filled(self):
         snap = snapshot(

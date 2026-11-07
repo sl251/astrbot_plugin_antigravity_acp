@@ -103,6 +103,19 @@ data/plugin_data/astrbot_plugin_agy_provider/ 下的独立运行目录保存本�
 旧配置无需迁移，新工具/图片开关默认 false，无新增依赖；认证存储与刷新适配仍沿既有 M1 边界。完整配置、审批、取消与格式限制见 [M2/M3 实现交接](docs/M2_M3_IMPLEMENTATION.md)。
 
 
+## 工具执行兼容
+
+桥接只序列化 AstrBot 传入的启用工具描述，不在 provider 内检查或调用 `handler`。原生 `FunctionTool.call()/run()`、语音/多消息插件、MCP 与 handoff 都由 AstrBot 原生执行器处理；不要为了适配桥接改写插件工具。工具名称或参数 schema 无效时才按工具跳过。
+
+插件安装可撤销、仅对自身 provider 生效的原生 runner 适配：`skills_like` 请求改为 `full`（不是实现其两阶段取参协议）；无 session/conversation 的 runner 使用独立运行 ID；宿主结束/取消/异常时关闭属于本轮 abort signal 的 pending ACP turn，不重放工具。其它 provider、主/兜底模型及全局配置不变。
+
+原生语音工具的 `None` 表示直接发送并结束宿主：桥接清理 outstanding prompt，将未回填 ACP 的调用保守记录为 `unknown`；这不等于语音执行失败。语音实际成功以原生插件生成和平台发送证据为准。真实验收脚本使用捕获事件，不发送 QQ：
+
+- `scripts/native_runner_fake_check.py`：真实 AstrBot runner/executor + 显式 fake ACP，无网络；覆盖 full、缺省身份、skills_like→full、direct-result、hooks 和资源清理。
+- `scripts/native_tool_compat_check.py --execute --native-terminal --with-skills-like`：真实 AGY/MiMo，最多一次 TTS；验证 call/run、原生 None、有效 WAV、零 pending/callers、无重放。需已有合法 CLI 登录、真实插件配置以及认证 wrapper 允许的 plugin_data 路径；不复制凭据。
+
+剩余图片工具输出后缀/历史压缩、多次 yield、同 ACP 递归并发容量和长工具超时边界见 `docs/NATIVE_COMPAT_AUDIT.md`。
+
 ## M2/M3 开关与验收
 
 | 新配置 | 默认值 | 作用 |

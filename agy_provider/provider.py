@@ -255,7 +255,7 @@ class AgyProvider(Provider):
             )
             if snapshot.skipped:
                 logger.warning(
-                    f"AGY 工具桥跳过 {len(snapshot.skipped)} 个不可执行工具："
+                    f"AGY 工具桥跳过 {len(snapshot.skipped)} 个不兼容工具 schema："
                     + "; ".join(snapshot.skipped)
                 )
             if snapshot.tools and (key is None or signal is None):

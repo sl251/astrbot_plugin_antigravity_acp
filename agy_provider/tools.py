@@ -24,27 +24,6 @@ from .messages import digest
 SERVER_NAME = "astrbot"
 FRAME_LIMIT = 1048576
 MAX_SESSION_CALLS = 4096
-_HOST_EXECUTABLE_TOOL_TYPES = None
-
-
-def _host_executable_tool_types():
-    global _HOST_EXECUTABLE_TOOL_TYPES
-    if _HOST_EXECUTABLE_TOOL_TYPES is None:
-        types = []
-        try:
-            from astrbot.core.agent.handoff import HandoffTool
-
-            types.append(HandoffTool)
-        except Exception:
-            pass
-        try:
-            from astrbot.core.agent.mcp_client import MCPTool
-
-            types.append(MCPTool)
-        except Exception:
-            pass
-        _HOST_EXECUTABLE_TOOL_TYPES = tuple(types)
-    return _HOST_EXECUTABLE_TOOL_TYPES
 
 
 def _sanitize_for_gemini(schema, depth=0):
@@ -286,16 +265,10 @@ class ToolSnapshot:
                 continue
             name = getattr(tool, "name", None)
             try:
-                # The host executor also handles handoff/MCP tools without a
-                # callable handler. Skip other placeholders individually.
-                if not callable(getattr(tool, "handler", None)) and not isinstance(
-                    tool, _host_executable_tool_types()
-                ):
-                    raise AgyError(
-                        "TOOL_SCHEMA",
-                        "无可调用宿主 handler 且非宿主可执行类型（handoff/MCP），"
-                        "可能是 skills_like 占位工具。",
-                    )
+                # Providers serialize the host-supplied active ToolSet. A
+                # FunctionTool may implement run()/call(), or be a schema-only
+                # skills_like view; neither needs a handler here. Execution and
+                # raw-tool lookup remain exclusively in AstrBot's executor.
                 if not isinstance(name, str) or not name or name in self.to_wire:
                     raise AgyError("TOOL_SCHEMA", "工具名称为空或重复。")
                 wire = (
