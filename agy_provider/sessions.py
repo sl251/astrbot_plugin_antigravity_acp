@@ -11,15 +11,18 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError
-from .messages import ConversationInput, digest, replay
+from .messages import ConversationInput, digest, prompt_blocks
 from .models import catalog, select
 from .process import LaunchInfo, discover, launch_args, make_home
+from .tools import ToolBroker, ToolSnapshot
 from .transport import AcpClient, Event
 
 
 @dataclass
 class Session:
     client: AcpClient | None = None
+    broker: ToolBroker | None = None
+    tool_hash: str = ""
     home: Path | None = None
     system_hash: str = ""
     model: str = ""
@@ -35,8 +38,13 @@ class Session:
 
     async def close_unlocked(self) -> None:
         try:
-            if self.client:
-                await self.client.close()
+            try:
+                if self.broker:
+                    await self.broker.close()
+            finally:
+                self.broker = None
+                if self.client:
+                    await self.client.close()
         finally:
             self.client = None
             if self.home:
@@ -61,6 +69,14 @@ class Runtime:
         self.model_cache: list[str] = []
         self.model_cache_time = 0.0
         self.sweeper: asyncio.Task | None = None
+        self.turns = {}
+        self.entry_locks = {}
+        self.tool_outcomes: dict[str, str] = {}
+
+    def record_tool_outcome(self, call_id, state):
+        self.tool_outcomes[call_id] = state
+        while len(self.tool_outcomes) > 256:
+            del self.tool_outcomes[next(iter(self.tool_outcomes))]
 
     async def launch_info(self) -> LaunchInfo:
         async with self.info_lock:
@@ -136,22 +152,42 @@ class Runtime:
                     self.key_locks[key] = (lock, refs - 1)
                 self.callers -= 1
 
-    async def open(self, session: Session, system: str) -> dict:
+    async def open(self, session: Session, system: str, snapshot=None) -> dict:
         async with session.lifecycle:
-            return await self._open_unlocked(session, system)
+            return await self._open_unlocked(session, system, snapshot)
 
-    async def _open_unlocked(self, session: Session, system: str) -> dict:
+    async def _open_unlocked(
+        self, session: Session, system: str, snapshot=None
+    ) -> dict:
         await session.close_unlocked()
         info = await self.launch_info()
         if self.stopped:
             raise AgyError("CLOSED", "插件已停用。")
-        session.home = make_home(self.root, system)
+        session.home = make_home(
+            self.root, system, tools_mode=bool(snapshot and snapshot.tools)
+        )
         session.client = AcpClient(self.settings)
         try:
             await session.client.start(
-                launch_args(info, session.home), session.home / "workspace"
+                launch_args(
+                    info,
+                    session.home,
+                    use_default_agent=bool(snapshot and snapshot.tools),
+                ),
+                session.home / "workspace",
             )
-            result = await session.client.new_session(session.home / "workspace")
+            servers = []
+            if snapshot and snapshot.tools:
+                session.broker = ToolBroker(snapshot, self.settings)
+                session.broker.audit_sink = self.record_tool_outcome
+                servers = [await session.broker.start()]
+                session.client.tool_broker = session.broker
+            result = await session.client.new_session(
+                session.home / "workspace", servers
+            )
+            if session.broker:
+                session.broker.session_id = session.client.session_id
+            session.tool_hash = snapshot.fingerprint if snapshot else ""
             if self.stopped:
                 raise AgyError("CLOSED", "插件已停用。")
             return result
@@ -172,7 +208,12 @@ class Runtime:
                 return list(self.model_cache)
 
     async def stream(
-        self, request: ConversationInput, key: str | None, model: str, effort: str
+        self,
+        request: ConversationInput,
+        key: str | None,
+        model: str,
+        effort: str,
+        snapshot: ToolSnapshot | None = None,
     ) -> AsyncIterator[Event]:
         temporary = key is None
         async with self.lease(key or uuid.uuid4().hex, temporary) as session:
@@ -185,18 +226,20 @@ class Runtime:
                     and session.system_hash == request.system_hash
                     and session.model == model
                     and session.effort == effort
+                    and session.tool_hash == (snapshot.fingerprint if snapshot else "")
+                    and (session.broker is None or len(session.broker.seen) < 4000)
                     and bool(session.expected)
                     and session.expected == hashes[:-1]
                 )
                 if reusable:
-                    prompt, omitted = replay(
+                    prompt, omitted = prompt_blocks(
                         request.messages[-1:], self.settings.history_bytes
                     )
                 else:
-                    prompt, omitted = replay(
+                    prompt, omitted = prompt_blocks(
                         request.messages, self.settings.history_bytes
                     )
-                    result = await self.open(session, request.system)
+                    result = await self.open(session, request.system, snapshot)
                     assert session.client
                     await select(session.client, result, model, effort)
                     session.system_hash = request.system_hash
@@ -204,8 +247,21 @@ class Runtime:
                 if omitted:
                     yield Event("history_trimmed", result={"omitted_messages": omitted})
                 assert session.client
+                if any(
+                    p.get("type") == "image" for p in prompt
+                ) and not session.client.capabilities.get("promptCapabilities", {}).get(
+                    "image"
+                ):
+                    raise AgyError(
+                        "IMAGE_CAPABILITY", "当前 CLI/model 没有声明图片输入能力。"
+                    )
+                if session.broker:
+                    session.broker.count = 0
+                    session.broker.result_bytes = 0
+                    session.broker.notifications.clear()
+                    session.broker.error = None
                 text_parts = []
-                turn = session.client.generate(prompt)
+                turn = tool_events(session.client, prompt, session.broker)
                 try:
                     async for event in turn:
                         if event.kind == "text":
@@ -220,10 +276,10 @@ class Runtime:
                                     "STOP",
                                     "AGY 未正常结束本轮，请在 CLI 检查限制或拒绝原因。",
                                 )
-                            answer = "".join(text_parts)
+                            answer = "".join(text_parts)[len(request.consumed_text) :]
                             if not answer.strip():
                                 raise AgyError("EMPTY", "AGY 没有返回正文。")
-                            session.expected = hashes + [
+                            session.expected = request.hashes + [
                                 digest({"role": "assistant", "content": answer})
                             ]
                             completed = True
@@ -253,6 +309,8 @@ class Runtime:
 
     async def close(self) -> None:
         self.stopped = True
+        await asyncio.gather(*(turn.close() for turn in list(self.turns.values())))
+        self.turns.clear()
         if self.sweeper:
             self.sweeper.cancel()
             await asyncio.gather(self.sweeper, return_exceptions=True)
@@ -267,3 +325,37 @@ class Runtime:
             self.root.rmdir()
         except OSError:
             pass
+
+
+async def tool_events(client, prompt, broker):
+    """Multiplex MCP pending calls without blocking ACP's stdout reader."""
+    source = client.generate(prompt)
+    next_event = next_call = None
+    try:
+        next_event = asyncio.create_task(anext(source))
+        if broker:
+            next_call = asyncio.create_task(broker.ready.get())
+        while True:
+            tasks = [t for t in (next_event, next_call) if t]
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if next_event.done():
+                try:
+                    event = next_event.result()
+                except StopAsyncIteration:
+                    return
+                yield event
+                next_event = asyncio.create_task(anext(source))
+            elif next_call and next_call.done():
+                call = next_call.result()
+                if call.id in broker.pending and not call.future.done():
+                    yield Event(
+                        "tools",
+                        result={"call": call, "broker": broker, "client": client},
+                    )
+                next_call = asyncio.create_task(broker.ready.get())
+    finally:
+        tasks = [t for t in (next_event, next_call) if t]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await source.aclose()

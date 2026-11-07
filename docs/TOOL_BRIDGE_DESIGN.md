@@ -115,3 +115,7 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 30
 5. 再按任务书覆盖取消/拒绝/超时、重复与乱序、双群/双 Provider、20 轮历史、重载、认证自然刷新与图片。复杂测试不在本 PR 运行。
 
 提交的协议夹具只能来自真实探针且经白名单脱敏；本次没有真实线上的 ACP/MCP 夹具，测试里的 mock 不是实测。独立审查及真实成功/失败探针仍为 M0 放行条件；两条路线都无法满足时保留文本模式，提交阻塞报告与宿主扩展成本，不继续 M2/M3。
+
+## 2026-11-07 losvps 实测补充
+
+后续外部真实探针已通过 M0：`session/new.mcpServers` stdio MCP 加载与 echo 回填成立，ACP 工具更新仅为状态通知；MCP `_meta` 含 conversation/root ID，图片图文/纯图读回成功。此事实更新不改写上文的旧阶段记录。当前实现、宿主 v4.29.4 接口边界、测试状态及报告/可执行 harness 的细节差异见 [M2/M3 实现与验收交接](M2_M3_IMPLEMENTATION.md)。本分支未自行运行真实闭环，仍需主代理运行验收脚本。

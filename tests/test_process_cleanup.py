@@ -1,6 +1,7 @@
 """Local subprocess cleanup regressions; no AGY account or dependencies needed."""
 
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -10,7 +11,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agy_provider.config import Settings
-from agy_provider.process import spawn, stop_process
+from agy_provider.process import (
+    AGENT_NAME,
+    LaunchInfo,
+    launch_args,
+    make_home,
+    spawn,
+    stop_process,
+)
 from agy_provider.sessions import Runtime, Session
 from agy_provider.transport import AcpClient
 
@@ -151,6 +159,53 @@ class ProcessCleanupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime.sessions, {})
             self.assertEqual(proc.returncode, -signal.SIGKILL)
             self.assert_reaped(proc, baseline)
+
+
+class HomeLayoutTests(unittest.IsolatedAsyncioTestCase):
+    """Agent selection per bridge mode, verified against the AGY 1.5.2 CLI."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_tools_mode_home_uses_workspace_agents_md(self):
+        home = make_home(self.root, "PERSONA-X", tools_mode=True)
+        agents = home / "workspace" / "AGENTS.md"
+        settings = json.loads((home / "agy" / "settings.json").read_text())
+        self.assertTrue(agents.is_file())
+        self.assertIn("PERSONA-X", agents.read_text())
+        self.assertIn("session MCP tools", agents.read_text())
+        self.assertIn(
+            "never run built-in shell or file tools", agents.read_text().lower()
+        )
+        self.assertEqual(
+            settings, {"toolPermission": "request-review", "agentMode": ""}
+        )
+        # custom-agent plugin must not exist: with --agent active the CLI hides
+        # session MCP tools from the LLM (real-CLI experiments, AGY 1.5.2).
+        self.assertFalse((home / "config" / "plugins" / AGENT_NAME).exists())
+
+    def test_plain_mode_home_keeps_restricted_agent(self):
+        home = make_home(self.root, "PERSONA-Y", tools_mode=False)
+        agent_md = (
+            home / "config" / "plugins" / AGENT_NAME / "agents" / f"{AGENT_NAME}.md"
+        )
+        self.assertTrue(agent_md.is_file())
+        self.assertIn("PERSONA-Y", agent_md.read_text())
+        self.assertIn("tools: []", agent_md.read_text())
+        self.assertFalse((home / "workspace" / "AGENTS.md").exists())
+
+    def test_launch_args_drop_agent_flag_only_for_tools_mode(self):
+        info = LaunchInfo("agy", "1.5.2", False)
+        home = Path("/tmp/any")
+        default = launch_args(info, home, use_default_agent=True)
+        restricted = launch_args(info, home, use_default_agent=False)
+        self.assertNotIn("--agent", default)
+        self.assertIn("astrbot-chat", " ".join(restricted))
+        for args in (default, restricted):
+            self.assertEqual(args[args.index("--gemini-dir") + 1], str(home))
+            self.assertEqual(args[args.index("--app-data-dir") + 1], "agy")
 
 
 if __name__ == "__main__":

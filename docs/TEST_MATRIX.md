@@ -44,3 +44,24 @@
 - 测试账号：仅记录类型，不记录邮箱/令牌：
 - 已运行测试项与结果：
 - 已知问题：
+
+## M2/M3 增补（2026-11-07 losvps 实测交接）
+
+M0/M3 协议证据来自外部真实探针；下列“离线”仅表示本仓库 fake ACP + 真 MCP 子进程/IPC 合同测试，不等于真实模型或完整 AstrBot 验收。细节与支持限制见 [M2/M3 实现交接](M2_M3_IMPLEMENTATION.md)。
+
+| 范围 | 验证项 | 自动测试/验收入口 | 状态 |
+|---|---|---|---|
+| M2 echo | 原 prompt outstanding、一次宿主交接、MCP 结果回填 | test_tools / test_tool_runtime / test_provider_media_tools | 离线覆盖；真实待验收 |
+| M2 schema | inactive/缺失 handler、类型、未知工具、部分参数、双向名称、schema 变更 | test_tools / test_tool_runtime | 离线覆盖 |
+| M2 权限 | conversation/root 不匹配、无宿主上下文、审批拒绝/异常/超时零执行 | test_tools / test_tool_runtime / test_provider_media_tools | 离线覆盖 |
+| M2 顺序 | 重复 MCP ID、重复/乱序 ACP 通知、并发 pending、工具字段与正文分离 | test_tools / test_tool_runtime | 离线覆盖 |
+| M2 预算 | 次数、pending 并发、结果总字节、执行/审批期限；不截断结构化结果 | test_tools / test_tool_runtime | 离线覆盖 |
+| M2 生命周期 | 等待取消、EOF、超时、停用、迟到结果、双群及双 Provider | test_tool_runtime / test_process_cleanup | 离线覆盖 |
+| M2 历史 | 20 轮、前置正文、编辑/回滚/闭合历史重建、重载旧结果拒绝 | test_tool_runtime / test_provider_media_tools | 离线覆盖 |
+| M2 真实宿主 | 原版 ToolLoopAgentRunner/executor/hooks，三段证据 | scripts/real_loop_check.py | 主代理待运行 |
+| M3 输入 | 纯图、双图、三入口去重、contexts-only、图+工具续轮 | test_media / test_provider_media_tools | 离线覆盖 |
+| M3 历史 | 内容身份、原路径编辑、跨历史去重、未知/失效附件 | test_media / test_provider_media_tools | 离线覆盖 |
+| M3 安全 | 路径穿越/符号链接、恶意 URL、DNS pin、每跳 SSRF、MIME/签名 | test_media | 离线覆盖 |
+| M3 预算 | 数量、总字节、像素、PNG 解压、HTTP 响应/超时/取消 | test_media | 离线覆盖 |
+| M3 真实读回 | 7391 图文与纯图 | scripts/real_loop_check.py --with-image | 主代理待运行 |
+| 回归 | 原有 25 项文本、流式、权限拒绝、认证分类、进程回收 | 原四个 test 文件 | 保留运行 |

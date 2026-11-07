@@ -45,12 +45,18 @@ class AgyProviderPlugin(Star):
         self.registered = False
 
     async def initialize(self):
-        configure(Settings.from_dict(self.config))
+        settings = Settings.from_dict(self.config)
+        configure(settings)
         unregister_owned_adapter()
+        template = deepcopy(DEFAULT_CONFIG)
+        if settings.enable_tools:
+            template["modalities"].append("tool_use")
+        if settings.enable_images:
+            template["modalities"].append("image")
         registry.register_provider_adapter(
             PROVIDER_TYPE,
-            "本机官方 AGY CLI / ACP Gemini 文本模型",
-            default_config_tmpl=deepcopy(DEFAULT_CONFIG),
+            "本机官方 AGY CLI / ACP Gemini 模型（工具/图片按插件开关启用）",
+            default_config_tmpl=template,
             provider_display_name="AGY Gemini (ACP)",
         )(AgyProvider)
         self.registered = True

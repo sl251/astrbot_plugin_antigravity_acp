@@ -29,12 +29,17 @@ class AcpClient:
         self.session_id: str | None = None
         self.capabilities: dict = {}
         self.failed: AgyError | None = None
+        self.failure_event = asyncio.Event()
         self.reader: asyncio.Task | None = None
         self.stderr_reader: asyncio.Task | None = None
         self.active = False
         self.output_bytes = 0
         self.closed = False
         self.close_lock = asyncio.Lock()
+        self.tool_broker = None
+        self.permission_errors: list[str] = []
+        self.prompt_deadline = 0
+        self.prompt_terminal = False
 
     @property
     def alive(self) -> bool:
@@ -117,10 +122,10 @@ class AcpClient:
                 # Consume exceptions even when writing failed before awaiting it.
                 future.exception()
 
-    async def new_session(self, cwd: Path) -> dict:
+    async def new_session(self, cwd: Path, mcp_servers: list | None = None) -> dict:
         result = await self.request(
             "session/new",
-            {"cwd": str(cwd), "mcpServers": []},
+            {"cwd": str(cwd), "mcpServers": mcp_servers or []},
             self.settings.startup_timeout,
         )
         sid = result.get("sessionId")
@@ -142,6 +147,7 @@ class AcpClient:
 
     def _fail(self, error: AgyError) -> None:
         self.failed = self.failed or error
+        self.failure_event.set()
         for future in list(self.pending.values()):
             if not future.done():
                 future.set_exception(self.failed)
@@ -204,6 +210,8 @@ class AcpClient:
         reply = {"jsonrpc": "2.0", "id": obj["id"]}
         if obj["method"] == "session/request_permission":
             reply["result"] = {"outcome": {"outcome": "cancelled"}}
+            if len(self.permission_errors) < 128:
+                self.permission_errors.append("TOOL_PERMISSION_DENIED")
         else:
             reply["error"] = {
                 "code": -32601,
@@ -223,6 +231,9 @@ class AcpClient:
             return
         kind = update.get("sessionUpdate")
         if kind in {"tool_call", "tool_call_update"}:
+            if self.tool_broker is not None:
+                self.tool_broker.observe(update)
+                return
             raise AgyError(
                 "TOOLS_DISABLED",
                 "AGY 尝试调用内置工具；已中止该轮，请检查 CLI 对无工具 agent 的支持。",
@@ -247,24 +258,51 @@ class AcpClient:
                     "BACKPRESSURE", "流式消费者过慢，已中止请求以限制内存占用。"
                 ) from None
 
-    async def generate(self, text: str) -> AsyncIterator[Event]:
+    async def generate(self, text: str | list[dict]) -> AsyncIterator[Event]:
         if self.active:
             raise AgyError("BUSY", "同一 ACP 会话不能同时生成。")
         self.events = asyncio.Queue(maxsize=128)
         self.output_bytes = 0
         self.active = True
+        self.prompt_terminal = False
+        self.prompt_deadline = (
+            asyncio.get_running_loop().time() + self.settings.request_timeout
+        )
         completed = False
         response = asyncio.create_task(
             self.request(
                 "session/prompt",
                 {
                     "sessionId": self.session_id,
-                    "prompt": [{"type": "text", "text": text}],
+                    "prompt": [{"type": "text", "text": text}]
+                    if isinstance(text, str)
+                    else text,
                 },
                 self.settings.request_timeout,
             ),
             name="agy:prompt",
         )
+
+        def prompt_finished(task):
+            self.prompt_terminal = True
+            if task.cancelled():
+                return
+            error = task.exception()
+            if error is not None and self.tool_broker is not None:
+                self._fail(
+                    error
+                    if isinstance(error, AgyError)
+                    else AgyError("TRANSPORT", "工具轮的 ACP prompt 已结束。")
+                )
+            elif self.tool_broker is not None and self.tool_broker.pending:
+                self._fail(
+                    AgyError(
+                        "TOOL_TERMINATED",
+                        "原 ACP prompt 已结束，尚未完成的工具请求已取消。",
+                    )
+                )
+
+        response.add_done_callback(prompt_finished)
         getter = None
         try:
             while True:
