@@ -253,6 +253,11 @@ class AgyProvider(Provider):
                 if self.settings.enable_tools and tool_choice == "auto"
                 else None
             )
+            if snapshot.skipped:
+                logger.warning(
+                    f"AGY 工具桥跳过 {len(snapshot.skipped)} 个不可执行工具："
+                    + "; ".join(snapshot.skipped)
+                )
             if snapshot.tools and (key is None or signal is None):
                 raise AgyError(
                     "TOOL_CONTEXT", "工具调用需要宿主会话身份及 abort_signal 生命周期。"

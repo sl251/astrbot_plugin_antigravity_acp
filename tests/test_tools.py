@@ -100,10 +100,27 @@ class ToolSchemaTests(unittest.TestCase):
         validate({"message": "hi"}, old.tools[0]["inputSchema"])
         self.assertNotEqual(old.fingerprint, snapshot(tool(active=False)).fingerprint)
 
-    def test_light_schema_and_duplicate_name_rejected(self):
-        for tools in ([tool(handler=False)], [tool(), tool()]):
-            with self.subTest(tools=len(tools)), self.assertRaises(AgyError):
-                snapshot(*tools)
+    def test_unsupported_tools_skipped_with_reason(self):
+        snap = snapshot(
+            tool(handler=False),
+            tool("good_probe"),
+            tool("bad_schema_probe", schema={"type": "object", "$ref": "#/x"}),
+            tool("dup_probe"),
+            tool("dup_probe"),
+            tool("disabled", active=False),
+        )
+        self.assertEqual(list(snap.to_wire), ["good_probe", "dup_probe"])
+        self.assertEqual(len(snap.tools), 2)
+        self.assertEqual(len(snap.skipped), 3)
+        self.assertTrue(snap.skipped[0].startswith("echo_probe: "))
+        self.assertTrue(any("dup_probe" in item for item in snap.skipped))
+        self.assertTrue(any("bad_schema_probe" in item for item in snap.skipped))
+
+    def test_all_tools_unusable_equals_no_tools(self):
+        snap = snapshot(tool(handler=False))
+        self.assertEqual(snap.tools, [])
+        self.assertEqual(len(snap.skipped), 1)
+        self.assertIn("无可调用宿主 handler", snap.skipped[0])
 
     def test_json_types_and_nested_constraints(self):
         schema = {

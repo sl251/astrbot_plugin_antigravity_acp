@@ -81,7 +81,7 @@ data/plugin_data/astrbot_plugin_agy_provider/ 下的独立运行目录保存本�
 ## 当前边界
 
 - 不实现客户端身份伪装、二进制补丁、账号池或 OAuth 反向代理。
-- 工具开关默认关闭。启用后仅提供本轮 active 完整 ToolSet，支持 auto/none；required/指定函数、skills_like、无 handler 工具拒绝。工具结果由宿主 runner 执行和回填；闭合旧历史按转录重建。
+- 工具开关默认关闭。启用后仅提供本轮 active 完整 ToolSet，支持 auto/none；required/指定函数不可靠实现，拒绝。无 handler 工具（skills_like 占位、远程代理）自动跳过并记 WARN 日志，不中断请求。工具结果由宿主 runner 执行和回填；闭合旧历史按转录重建。
 - AstrBot 若在 provider 前删除了不支持的媒体，插件无法恢复附件；请用宿主图片描述功能或其他视觉模型。
 - 用量只映射最终响应实际提供的计数，缺失时保持未知，不读取 CLI SQLite 或猜测上下文窗口。
 - 原生 CLI 调用不等于 Google 授权第三方机器人使用订阅，也不保证账号安全，使用范围以官方条款为准。

@@ -236,36 +236,43 @@ class ToolSnapshot:
         self.tools = []
         self.to_host = {}
         self.to_wire = {}
+        self.skipped = []
         for tool in getattr(func_tool, "tools", []):
             if not getattr(tool, "active", True):
                 continue
-            # skills_like's placeholder FunctionTools are deliberately refused.
-            if not callable(getattr(tool, "handler", None)):
-                raise AgyError(
-                    "TOOL_CONTEXT",
-                    "工具桥需要完整宿主 handler/schema；不支持 skills_like 或远程工具代理。",
+            name = getattr(tool, "name", None)
+            try:
+                # skills_like placeholders and remote tool proxies are not
+                # executable here: skip them instead of failing the whole set.
+                if not callable(getattr(tool, "handler", None)):
+                    raise AgyError(
+                        "TOOL_SCHEMA",
+                        "无可调用宿主 handler（skills_like 占位/远程工具代理）。",
+                    )
+                if not isinstance(name, str) or not name or name in self.to_wire:
+                    raise AgyError("TOOL_SCHEMA", "工具名称为空或重复。")
+                wire = (
+                    name
+                    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
+                    and not name.startswith("agy_")
+                    else "agy_" + digest(name)[:48]
                 )
-            name = tool.name
-            if not isinstance(name, str) or not name or name in self.to_wire:
-                raise AgyError("TOOL_SCHEMA", "工具名称为空或重复。")
-            wire = (
-                name
-                if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name)
-                and not name.startswith("agy_")
-                else "agy_" + digest(name)[:48]
-            )
-            if wire in self.to_host:
-                raise AgyError("TOOL_SCHEMA", "工具名称映射冲突。")
-            schema = copy.deepcopy(tool.parameters)
-            if schema is None:
-                schema = {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                }
-            validate_schema(schema)
-            if schema.get("type") != "object":
-                raise AgyError("TOOL_SCHEMA", "工具根参数必须为 object。")
+                if wire in self.to_host:
+                    raise AgyError("TOOL_SCHEMA", "工具名称映射冲突。")
+                schema = copy.deepcopy(tool.parameters)
+                if schema is None:
+                    schema = {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    }
+                validate_schema(schema)
+                if schema.get("type") != "object":
+                    raise AgyError("TOOL_SCHEMA", "工具根参数必须为 object。")
+            except AgyError as exc:
+                label = name if isinstance(name, str) and name else "<unnamed>"
+                self.skipped.append(f"{label}: {exc}")
+                continue
             self.to_host[wire] = name
             self.to_wire[name] = wire
             self.tools.append(
