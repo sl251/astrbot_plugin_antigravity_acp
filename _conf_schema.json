@@ -64,5 +64,65 @@
     "description": "单轮正文与思考合计字节上限",
     "type": "int",
     "default": 4194304
+  },
+  "enable_tools": {
+    "description": "启用宿主工具桥（需完整工具 schema 与宿主会话）",
+    "type": "bool",
+    "default": false
+  },
+  "enable_images": {
+    "description": "启用 PNG/JPEG 图片输入",
+    "type": "bool",
+    "default": false
+  },
+  "tool_max_calls": {
+    "description": "单轮最大工具调用次数",
+    "type": "int",
+    "default": 16
+  },
+  "tool_max_concurrent": {
+    "description": "单轮最大待处理工具数",
+    "type": "int",
+    "default": 1
+  },
+  "tool_approval_timeout": {
+    "description": "工具交接/审批等待预算（秒）",
+    "type": "int",
+    "default": 60
+  },
+  "tool_execution_timeout": {
+    "description": "宿主工具执行等待预算（秒）",
+    "type": "int",
+    "default": 120
+  },
+  "tool_result_bytes": {
+    "description": "单轮工具结果总字节预算",
+    "type": "int",
+    "default": 262144
+  },
+  "image_max_count": {
+    "description": "单次输入最多图片数",
+    "type": "int",
+    "default": 8
+  },
+  "image_max_bytes": {
+    "description": "单次输入图片总字节预算",
+    "type": "int",
+    "default": 8388608
+  },
+  "image_max_pixels": {
+    "description": "每张图片最大像素数",
+    "type": "int",
+    "default": 20000000
+  },
+  "image_timeout": {
+    "description": "单张媒体读取超时（秒）",
+    "type": "int",
+    "default": 15
+  },
+  "media_roots": {
+    "description": "允许读取的媒体目录（绝对路径，不含符号链接）",
+    "type": "list",
+    "default": []
   }
 }

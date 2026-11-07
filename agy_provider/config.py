@@ -19,10 +19,31 @@ class Settings:
     idle_ttl: int = 600
     history_bytes: int = 160000
     max_output_bytes: int = 4194304
+    enable_tools: bool = False
+    enable_images: bool = False
+    tool_max_calls: int = 16
+    tool_max_concurrent: int = 1
+    tool_approval_timeout: int = 60
+    tool_execution_timeout: int = 120
+    tool_result_bytes: int = 262144
+    media_roots: tuple[str, ...] = ()
+    image_max_count: int = 8
+    image_max_bytes: int = 8388608
+    image_max_pixels: int = 20000000
+    image_timeout: int = 15
 
     @classmethod
     def from_dict(cls, values: dict) -> "Settings":
         limits = {
+            "tool_max_calls": (1, 128),
+            "tool_max_concurrent": (1, 8),
+            "tool_approval_timeout": (1, 300),
+            "tool_execution_timeout": (1, 1800),
+            "tool_result_bytes": (1024, 8388608),
+            "image_max_count": (1, 16),
+            "image_max_bytes": (1024, 33554432),
+            "image_max_pixels": (1, 40000000),
+            "image_timeout": (1, 60),
             "startup_timeout": (5, 300),
             "request_timeout": (10, 1800),
             "queue_timeout": (1, 300),
@@ -35,6 +56,18 @@ class Settings:
         }
         parsed = {}
         defaults = cls()
+        for key in ("enable_tools", "enable_images"):
+            value = values.get(key, False)
+            if type(value) is not bool:
+                raise AgyError("CONFIG", f"{key} 必须是布尔值。")
+            parsed[key] = value
+        roots = values.get("media_roots", [])
+        if not isinstance(roots, (list, tuple)) or any(
+            not isinstance(p, str) or not Path(p).is_absolute() or ".." in Path(p).parts
+            for p in roots
+        ):
+            raise AgyError("CONFIG", "media_roots 必须为授权媒体目录的绝对路径列表。")
+        parsed["media_roots"] = tuple(roots)
         for key, (low, high) in limits.items():
             raw = values.get(key, getattr(defaults, key))
             try:

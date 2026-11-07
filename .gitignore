@@ -20,3 +20,4 @@ sessions.json
 .idea/
 .vscode/
 .DS_Store
+codex-m2m3*.out

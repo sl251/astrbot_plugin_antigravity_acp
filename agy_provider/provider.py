@@ -1,6 +1,8 @@
 """AstrBot chat provider adapter. All model traffic stays on local stdio."""
 
 import asyncio
+import copy
+import inspect
 from collections.abc import AsyncIterator
 from pathlib import Path
 from weakref import WeakSet
@@ -12,8 +14,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .config import Settings
 from .errors import AgyError
+from .media import prepare_media
 from .messages import digest, normalize
 from .sessions import Runtime
+from .tool_turn import chat_events
+from .tools import ToolSnapshot
 
 PROVIDER_TYPE = "agy_acp"
 OWNER = "sl251/astrbot_plugin_agy_provider"
@@ -91,6 +96,26 @@ async def abortable(source: AsyncIterator, signal: asyncio.Event | None):
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await source.aclose()
+
+
+async def await_or_abort(operation, signal):
+    task = asyncio.create_task(operation)
+    stop = asyncio.create_task(signal.wait()) if signal is not None else None
+    try:
+        if signal is not None and signal.is_set():
+            raise asyncio.CancelledError
+        if stop is not None:
+            done, _ = await asyncio.wait(
+                (task, stop), return_when=asyncio.FIRST_COMPLETED
+            )
+            if stop in done:
+                raise asyncio.CancelledError
+        return await task
+    finally:
+        tasks = [t for t in (task, stop) if t]
+        for child in tasks:
+            child.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class AgyProvider(Provider):
@@ -197,49 +222,141 @@ class AgyProvider(Provider):
         request_max_retries=None,
         **kwargs,
     ) -> AsyncIterator[LLMResponse]:
-        if image_urls or audio_urls:
-            raise AgyError("UNSUPPORTED", "首版仅支持文本，不支持图片和音频输入。")
-        if tool_choice != "auto" or tool_calls_result:
-            raise AgyError("TOOLS_DISABLED", "首版未接入 AstrBot 工具调用与结果回填。")
-        if func_tool and not self.warned_tools:
-            logger.warning(
-                "AGY 是纯文本 provider，未将 AstrBot 工具发送给 CLI。模型能力请仅勾选文本。"
-            )
-            self.warned_tools = True
-        request = normalize(
-            self._ensure_message_to_dicts(contexts),
-            prompt,
-            system_prompt,
-            extra_user_content_parts,
-            self.settings.history_bytes,
-        )
-        selected = model or self.get_model()
-        if not selected:
-            raise AgyError(
-                "MODEL", "请先获取 Gemini 模型列表并在 AstrBot 中选择具体模型。"
-            )
-        extra = self.provider_config.get("custom_extra_body") or {}
-        effort = kwargs.get(
-            "agy_thought_level", extra.get("agy_thought_level", "default")
-        )
-        if effort == "default":
-            effort = self.settings.thought_level
-        if effort not in {"default", "low", "medium", "high"}:
-            raise AgyError(
-                "CONFIG", "agy_thought_level 必须为 default/low/medium/high。"
-            )
         conversation_id = kwargs.get("conversation_id")
-        # No guessing identities from message text. Anonymous API/summary calls
-        # always use temporary processes, including provider health checks.
         key = (
             digest([session_id, conversation_id])
             if session_id or conversation_id
             else None
         )
         signal = kwargs.get("abort_signal")
-        if signal is not None and not isinstance(signal, asyncio.Event):
-            raise AgyError("CONFIG", "abort_signal 必须是 asyncio.Event。")
-        source = self.runtime.stream(request, key, selected, effort)
+        approver = kwargs.get("agy_tool_approver")
+        try:
+            if approver is not None and not inspect.iscoroutinefunction(approver):
+                raise AgyError(
+                    "TOOL_CONTEXT", "agy_tool_approver 必须为异步宿主审批回调。"
+                )
+            if audio_urls or kwargs.get("video_urls") or kwargs.get("pdf_urls"):
+                raise AgyError("UNSUPPORTED", "音频、视频和 PDF 输入尚未支持。")
+            if signal is not None and not isinstance(signal, asyncio.Event):
+                raise AgyError("CONFIG", "abort_signal 必须是 asyncio.Event。")
+            if tool_choice not in ("auto", "none"):
+                raise AgyError(
+                    "TOOL_CHOICE", "只支持 auto/none；required 和指定函数不可可靠实现。"
+                )
+            if not self.settings.enable_tools and tool_calls_result:
+                raise AgyError("TOOLS_DISABLED", "工具能力尚未启用。")
+            if func_tool and not self.settings.enable_tools and not self.warned_tools:
+                logger.warning("AGY enable_tools=false，未向 CLI 提供宿主工具。")
+                self.warned_tools = True
+            snapshot = ToolSnapshot(
+                func_tool
+                if self.settings.enable_tools and tool_choice == "auto"
+                else None
+            )
+            if snapshot.tools and (key is None or signal is None):
+                raise AgyError(
+                    "TOOL_CONTEXT", "工具调用需要宿主会话身份及 abort_signal 生命周期。"
+                )
+            raw_contexts = self._ensure_message_to_dicts(contexts) or []
+            raw_contexts, parts = await await_or_abort(
+                prepare_media(
+                    raw_contexts,
+                    prompt,
+                    extra_user_content_parts,
+                    image_urls,
+                    self.settings,
+                ),
+                signal,
+            )
+            if tool_calls_result:
+                results = (
+                    tool_calls_result
+                    if isinstance(tool_calls_result, list)
+                    else [tool_calls_result]
+                )
+                # Direct Provider API may pass the original prompt plus closed
+                # ToolCallsResult units. Native runner already uses contexts-only.
+                if prompt is not None:
+                    base = normalize(
+                        raw_contexts,
+                        prompt,
+                        system_prompt,
+                        parts,
+                        self.settings.history_bytes,
+                        tools=True,
+                        images=self.settings.enable_images,
+                    )
+                    raw_contexts = base.messages
+                    system_prompt = base.system
+                    prompt = None
+                    parts = None
+                for unit in results:
+                    if not hasattr(unit, "to_openai_messages"):
+                        raise AgyError(
+                            "TOOL_HISTORY",
+                            "tool_calls_result 必须为宿主 ToolCallsResult。",
+                        )
+                    exchange = unit.to_openai_messages()
+                    ids = {
+                        m.get("tool_call_id")
+                        for m in exchange
+                        if m.get("role") == "tool"
+                    }
+                    if any(
+                        m.get("tool_call_id") in ids
+                        for m in raw_contexts
+                        if m.get("role") == "tool"
+                    ):
+                        raise AgyError(
+                            "TOOL_HISTORY", "工具结果已在 contexts 中，不能重复提交。"
+                        )
+                    raw_contexts.extend(exchange)
+            continuation = bool(
+                raw_contexts
+                and raw_contexts[-1].get("role") == "tool"
+                and prompt is None
+            )
+            request = normalize(
+                raw_contexts,
+                prompt,
+                system_prompt,
+                parts,
+                self.settings.history_bytes,
+                tools=self.settings.enable_tools,
+                images=self.settings.enable_images,
+                continuation=continuation,
+            )
+            selected = model or self.get_model()
+            if not selected:
+                raise AgyError(
+                    "MODEL", "请先获取 Gemini 模型列表并在 AstrBot 中选择具体模型。"
+                )
+            extra = self.provider_config.get("custom_extra_body") or {}
+            effort = kwargs.get(
+                "agy_thought_level", extra.get("agy_thought_level", "default")
+            )
+            if effort == "default":
+                effort = self.settings.thought_level
+            if not isinstance(effort, str) or effort not in {
+                "default",
+                "low",
+                "medium",
+                "high",
+            }:
+                raise AgyError(
+                    "CONFIG", "agy_thought_level 必须为 default/low/medium/high。"
+                )
+        except BaseException:
+            pending = self.runtime.turns.pop(key, None)
+            if pending:
+                await pending.close()
+            raise
+        if snapshot.tools or key in self.runtime.turns or continuation:
+            source = chat_events(
+                self.runtime, request, key, selected, effort, snapshot, signal, approver
+            )
+        else:
+            source = self.runtime.stream(request, key, selected, effort)
         events = abortable(source, signal)
         text_parts, thoughts = [], []
         try:
@@ -261,6 +378,17 @@ class AgyProvider(Provider):
                     logger.warning(
                         "AGY 历史重建省略了 %s 条较旧记录（字节预算）。",
                         (event.result or {}).get("omitted_messages", 0),
+                    )
+                elif event.kind == "tools":
+                    call = event.result["call"]
+                    yield LLMResponse(
+                        role="assistant",
+                        completion_text="".join(text_parts),
+                        reasoning_content="".join(thoughts) or None,
+                        tools_call_name=[call.name],
+                        tools_call_args=[copy.deepcopy(call.arguments)],
+                        tools_call_ids=[call.id],
+                        is_chunk=False,
                     )
                 elif event.kind == "done":
                     result = event.result or {}
