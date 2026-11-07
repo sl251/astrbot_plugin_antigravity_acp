@@ -47,6 +47,29 @@ def _host_executable_tool_types():
     return _HOST_EXECUTABLE_TOOL_TYPES
 
 
+def _sanitize_for_gemini(schema, depth=0):
+    """Best-effort Gemini compatibility pass on a JSON schema.
+
+    Gemini's GenerateContentRequest requires every array property to carry an
+    ``items`` field; OpenAI-style schemas omit it, and AstrBot plugins generate
+    schemas like ``{"type": "array"}`` (e.g. anysearch content_types), which the
+    Gemini backend rejects with INVALID_ARGUMENT for the WHOLE request. Fill a
+    permissive string item schema; the host validates actual call arguments.
+    """
+    if depth > 8 or not isinstance(schema, dict):
+        return schema
+    if schema.get("type") == "array" and not isinstance(schema.get("items"), dict):
+        schema["items"] = {"type": "string"}
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for value in props.values():
+            _sanitize_for_gemini(value, depth + 1)
+    items = schema.get("items")
+    if isinstance(items, dict):
+        _sanitize_for_gemini(items, depth + 1)
+    return schema
+
+
 def validate_json(value, code, depth=0):
     """Validate the entire JSON tree, including unconstrained extra properties."""
     if depth > 32:
@@ -290,6 +313,7 @@ class ToolSnapshot:
                         "properties": {},
                         "additionalProperties": False,
                     }
+                _sanitize_for_gemini(schema)
                 validate_schema(schema)
                 if schema.get("type") != "object":
                     raise AgyError("TOOL_SCHEMA", "工具根参数必须为 object。")

@@ -153,6 +153,51 @@ class ToolSchemaTests(unittest.TestCase):
         finally:
             tools_module._HOST_EXECUTABLE_TOOL_TYPES = original_types
 
+    def test_gemini_array_items_filled(self):
+        snap = snapshot(
+            tool(
+                "anysearch_probe",
+                schema={
+                    "type": "object",
+                    "properties": {
+                        "content_types": {"type": "array", "description": "类型"},
+                        "tags": {"type": "array", "items": {"type": "number"}},
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            )
+        )
+        self.assertEqual(snap.skipped, [])
+        params = snap.tools[0]["inputSchema"]["properties"]
+        self.assertEqual(params["content_types"].get("items"), {"type": "string"})
+        self.assertEqual(params["tags"]["items"], {"type": "number"})
+
+    def test_gemini_nested_array_inside_items_object(self):
+        snap = snapshot(
+            tool(
+                "nested_probe",
+                schema={
+                    "type": "object",
+                    "properties": {
+                        "entries": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"labels": {"type": "array"}},
+                            },
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            )
+        )
+        self.assertEqual(snap.skipped, [])
+        entries = snap.tools[0]["inputSchema"]["properties"]["entries"]
+        self.assertEqual(
+            entries["items"]["properties"]["labels"]["items"], {"type": "string"}
+        )
+
     def test_json_types_and_nested_constraints(self):
         schema = {
             "type": "object",
