@@ -10,7 +10,7 @@
 
 工具调用必须有非匿名 session/conversation 身份及同一个 `asyncio.Event` abort signal。Provider 实例各自拥有 Runtime，续轮还绑定人格、模型、思考档位、schema 快照及可选审批回调身份。没有上下文、未闭合/篡改历史、旧进程结果、变动许可均拒绝。调用者传入的完整 active `ToolSet` 表示本轮宿主已经授权的工具集合；插件不从消息文字授予权限，不用全局 monkeypatch 获取 runner 上下文。
 
-`FunctionTool.active=False` 不暴露。MVP 要求 callable handler 及完整 object schema；无 handler 的 skills_like 占位与远程工具代理逐个跳过并记 WARN 日志（含跳过原因），不阻塞其余工具，全部不可用时等价于无工具。普通合法 MCP 名字保留；其他名称通过会话双向表映射为无碰撞编码名。JSON Schema 支持 object/array/基本类型、required、additionalProperties、items、enum/const、数值/长度约束、uniqueItems、anyOf/oneOf/allOf；`$ref`、pattern 等未实现约束导致该工具被跳过，不能静默忽略校验规则。参数始终为完整 JSON，ACP 通知中的部分参数不触发执行。
+`FunctionTool.active=False` 不暴露。MVP 要求完整 object schema，且具有 callable handler 或属于宿主可执行的 HandoffTool / MCPTool（可无 handler）；其他无 callable handler 的工具（如 skills_like 占位）逐个跳过并记 WARN 日志（含跳过原因），不阻塞其余工具，全部不可用时等价于无工具。普通合法 MCP 名字保留；其他名称通过会话双向表映射为无碰撞编码名。JSON Schema 支持 object/array/基本类型、required、additionalProperties、items、enum/const、数值/长度约束、uniqueItems、anyOf/oneOf/allOf；`$ref`、pattern 等未实现约束导致该工具被跳过，不能静默忽略校验规则。参数始终为完整 JSON，ACP 通知中的部分参数不触发执行。
 
 MCP `_meta` 中 `antigravity.google/conversation_id` 与 `root_conversation_id` 必须同时等于当前 ACP session ID。子 agent 的不同 conversation 暂不支持。MCP ID、随机宿主 ID、ACP `toolCallId` 分开保存；ACP 前缀 `mcp_astrbot_` 仅用于通知展示/预算校验，不通过 title/参数猜测 ACP 与 MCP ID 的关联。
 

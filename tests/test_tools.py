@@ -11,6 +11,7 @@ import os
 import unittest
 from types import SimpleNamespace
 
+import agy_provider.tools as tools_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.process import stop_process
@@ -121,6 +122,36 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertEqual(snap.tools, [])
         self.assertEqual(len(snap.skipped), 1)
         self.assertIn("无可调用宿主 handler", snap.skipped[0])
+
+    def test_handoff_tool_without_handler_is_bridged(self):
+        class FakeHandoffTool(SimpleNamespace):
+            pass
+
+        original_types = tools_module._HOST_EXECUTABLE_TOOL_TYPES
+        try:
+            tools_module._HOST_EXECUTABLE_TOOL_TYPES = (FakeHandoffTool,)
+            handoff = FakeHandoffTool(**vars(tool("transfer_to_ops", handler=False)))
+            snap = snapshot(handoff)
+            self.assertEqual(snap.to_wire, {"transfer_to_ops": "transfer_to_ops"})
+            self.assertEqual(snap.tools[0]["inputSchema"], SCHEMA)
+            self.assertEqual(snap.skipped, [])
+        finally:
+            tools_module._HOST_EXECUTABLE_TOOL_TYPES = original_types
+
+    def test_mcp_tool_without_handler_is_bridged(self):
+        class FakeMCPTool(SimpleNamespace):
+            pass
+
+        original_types = tools_module._HOST_EXECUTABLE_TOOL_TYPES
+        try:
+            tools_module._HOST_EXECUTABLE_TOOL_TYPES = (FakeMCPTool,)
+            mcp = FakeMCPTool(**vars(tool("remote_probe", handler=False)))
+            snap = snapshot(mcp)
+            self.assertEqual(snap.to_wire, {"remote_probe": "remote_probe"})
+            self.assertEqual(snap.tools[0]["inputSchema"], SCHEMA)
+            self.assertEqual(snap.skipped, [])
+        finally:
+            tools_module._HOST_EXECUTABLE_TOOL_TYPES = original_types
 
     def test_json_types_and_nested_constraints(self):
         schema = {
