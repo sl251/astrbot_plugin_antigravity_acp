@@ -16,6 +16,7 @@ from .config import Settings
 from .errors import AgyError
 from .media import prepare_media
 from .messages import digest, normalize
+from .paths import plugin_data_root
 from .sessions import Runtime
 from .tool_turn import chat_events
 from .tools import ToolSnapshot
@@ -131,11 +132,7 @@ class AgyProvider(Provider):
             )
         )
         namespace = digest(str(provider_config.get("id", PROVIDER_TYPE)))[:16]
-        root = (
-            Path(get_astrbot_plugin_data_path())
-            / "astrbot_plugin_agy_provider"
-            / namespace
-        )
+        root = plugin_data_root(Path(get_astrbot_plugin_data_path())) / namespace
         self.runtime = Runtime(self.settings, root)
         self.warned_tools = False
         _instances.add(self)
