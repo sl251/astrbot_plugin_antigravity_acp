@@ -211,24 +211,6 @@ python -m agy_provider.probe --command /path/to/agy
 
 未知 JSON-RPC `-32000` 不直接等同于未登录，403 也不等同于封号。模型目录最多缓存 5 分钟；实际生成时仍会校验模型。获取目录、自检和宿主连通测试是不同操作。
 
-### 4. 开发与回归测试
+### 4. 许可与致谢
 
-```sh
-# 运行离线单元测试（使用模拟 ACP，不联网、不消耗额度）
-python -m unittest discover -s tests
-
-# 配置项与 schema 一致性检查 + 静态检查
-python -m scripts.check_defaults
-ruff check .
-```
-
-更多底层协议契约、工具桥设计与真实链路验收脚本说明，请参阅仓库 `docs/` 目录下的详细文档：
-
-- [变更记录](CHANGELOG.md)
-- [实施计划](docs/PLAN.md)
-- [M2/M3 工具与图片实现说明](docs/M2_M3_IMPLEMENTATION.md)
-- [ACP 原生执行兼容核验](docs/NATIVE_COMPAT_AUDIT.md)
-- [M0 工具桥决策与预检交接](docs/TOOL_BRIDGE_DESIGN.md)
-- [测试矩阵](docs/TEST_MATRIX.md) 与 [测试交接](docs/TEST_HANDOFF.md)
-- [下一阶段任务书](docs/NEXT_PHASE_TASKBOOK.md)
-- [第三方参考与许可](THIRD_PARTY_NOTICES.md)
+本项目以 [MIT](LICENSE) 协议开源。ACP 接入思路改编自 [lili-luo/dsh-plugin-bundle](https://github.com/lili-luo/dsh-plugin-bundle)（同样 MIT），本插件为其 Python 原生重写，未捆绑其任何运行时代码；完整来源与引用说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。

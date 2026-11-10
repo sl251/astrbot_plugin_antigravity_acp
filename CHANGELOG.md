@@ -1,5 +1,11 @@
 # 变更记录
 
+## 0.3.0
+
+- 面向插件市场精简仓库：移除离线单元测试、内部开发文档与开发脚本，CI 改为源码语法检查；运行时代码与配置项与 0.2.0 完全一致。
+- 协议合规完善：LICENSE 补充上游 [lili-luo/dsh-plugin-bundle](https://github.com/lili-luo/dsh-plugin-bundle) 版权行，README 新增「许可与致谢」章节。
+- 元数据与描述统一改为 0.3.0（metadata、插件注册、ACP clientInfo/serverInfo）。
+
 ## 0.2.0
 
 - 增加默认启用的文件认证桥：隔离会话只链接同用户的官方 token 文件；启动前检查存在性、大小、归属、父目录权限和符号链接边界。`auth_bridge=false` 恢复纯隔离行为。
