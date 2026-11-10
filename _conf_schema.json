@@ -124,5 +124,11 @@
     "description": "允许读取的媒体目录（绝对路径，不含符号链接）",
     "type": "list",
     "default": []
+  },
+  "auth_bridge": {
+    "description": "桥接官方 CLI 登录态",
+    "type": "bool",
+    "default": true,
+    "hint": "只链接当前系统用户的官方 token 文件，不读取或复制内容；关闭后使用纯隔离会话。先在 AstrBot 实际运行环境执行 agy 登录。并发刷新行为未经验证。"
   }
 }

@@ -9,6 +9,7 @@ from .errors import AgyError
 @dataclass(frozen=True)
 class Settings:
     command: str = ""
+    auth_bridge: bool = True
     thought_level: str = "default"
     startup_timeout: int = 60
     request_timeout: int = 180
@@ -56,8 +57,8 @@ class Settings:
         }
         parsed = {}
         defaults = cls()
-        for key in ("enable_tools", "enable_images"):
-            value = values.get(key, False)
+        for key in ("enable_tools", "enable_images", "auth_bridge"):
+            value = values.get(key, getattr(defaults, key))
             if type(value) is not bool:
                 raise AgyError("CONFIG", f"{key} 必须是布尔值。")
             parsed[key] = value

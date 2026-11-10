@@ -164,7 +164,10 @@ class Runtime:
         if self.stopped:
             raise AgyError("CLOSED", "插件已停用。")
         session.home = make_home(
-            self.root, system, tools_mode=bool(snapshot and snapshot.tools)
+            self.root,
+            system,
+            tools_mode=bool(snapshot and snapshot.tools),
+            settings=self.settings,
         )
         session.client = AcpClient(self.settings)
         try:

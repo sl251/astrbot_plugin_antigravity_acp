@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .auth import bridge_auth
 from .config import Settings
 from .errors import AgyError, remote_error
 
@@ -181,41 +182,49 @@ def _guardrails(mcp_tools: bool) -> str:
     )
 
 
-def make_home(root: Path, system: str, tools_mode: bool = False) -> Path:
+def make_home(
+    root: Path,
+    system: str,
+    tools_mode: bool = False,
+    *,
+    settings: Settings | None = None,
+) -> Path:
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     home = Path(tempfile.mkdtemp(prefix="session-", dir=root))
-    app_dir = home / "agy"
-    app_dir.mkdir(mode=0o700)
-    workspace = home / "workspace"
-    workspace.mkdir(mode=0o700)
-    if tools_mode:
-        # AGY 1.5.2: session MCP tools never reach the LLM when a custom
-        # --agent is active (verified against the real CLI), so bridge-backed
-        # sessions run the default agent. The persona rides the workspace
-        # AGENTS.md context file instead of the agent markdown, and built-in
-        # tools stay fail-closed via the request-review permission handler.
-        files = {
-            workspace / "AGENTS.md": _guardrails(mcp_tools=True) + system + "\n",
-        }
-    else:
-        agent_dir = home / "config" / "plugins" / AGENT_NAME / "agents"
-        agent_dir.mkdir(parents=True, mode=0o700)
-        # Native custom-agent body carries the persona. No private ACP systemPrompt
-        # extension or user-global configuration is needed.
-        files = {
-            agent_dir.parent / "plugin.json": json.dumps({"name": AGENT_NAME}),
-            agent_dir / f"{AGENT_NAME}.md": (
-                f'---\nname: {AGENT_NAME}\ndescription: "AstrBot text chat"\n'
-                "tools: []\nexcludeDefaultComponents: true\nmainAgent: true\n---\n"
-                + _guardrails(mcp_tools=False)
-                + system
-                + "\n"
-            ),
-        }
-    files[app_dir / "settings.json"] = json.dumps(
-        {"toolPermission": "request-review", "agentMode": ""}
-    )
     try:
+        app_dir = home / "agy"
+        app_dir.mkdir(mode=0o700)
+        workspace = home / "workspace"
+        workspace.mkdir(mode=0o700)
+        if tools_mode:
+            # AGY 1.5.2: session MCP tools never reach the LLM when a custom
+            # --agent is active (verified against the real CLI), so bridge-backed
+            # sessions run the default agent. The persona rides the workspace
+            # AGENTS.md context file instead of the agent markdown, and built-in
+            # tools stay fail-closed via the request-review permission handler.
+            files = {
+                workspace / "AGENTS.md": _guardrails(mcp_tools=True) + system + "\n",
+            }
+        else:
+            agent_dir = home / "config" / "plugins" / AGENT_NAME / "agents"
+            agent_dir.mkdir(parents=True, mode=0o700)
+            # Native custom-agent body carries the persona. No private ACP systemPrompt
+            # extension or user-global configuration is needed.
+            files = {
+                agent_dir.parent / "plugin.json": json.dumps({"name": AGENT_NAME}),
+                agent_dir / f"{AGENT_NAME}.md": (
+                    f'---\nname: {AGENT_NAME}\ndescription: "AstrBot text chat"\n'
+                    "tools: []\nexcludeDefaultComponents: true\nmainAgent: true\n---\n"
+                    + _guardrails(mcp_tools=False)
+                    + system
+                    + "\n"
+                ),
+            }
+        files[app_dir / "settings.json"] = json.dumps(
+            {"toolPermission": "request-review", "agentMode": ""}
+        )
+        if settings is not None and settings.auth_bridge:
+            bridge_auth(home)
         for path, content in files.items():
             path.write_text(content, encoding="utf-8")
             path.chmod(0o600)

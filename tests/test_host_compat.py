@@ -330,6 +330,7 @@ class HostCompatTests(unittest.IsolatedAsyncioTestCase):
         from agy_provider import sessions
 
         settings = Settings(
+            auth_bridge=False,
             enable_tools=True,
             request_timeout=20,
             startup_timeout=5,
