@@ -16,11 +16,36 @@ from .errors import AgyError, remote_error
 AGENT_NAME = "astrbot-chat"
 
 
-async def spawn(argv: list[str], cwd: Path | None = None):
+PROXY_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def build_child_env(settings: Settings) -> dict[str, str]:
+    """Return an independent AGY-only environment; never mutate the host process."""
+    env = os.environ.copy()
+    if settings.proxy_mode == "custom":
+        env.update(dict.fromkeys(PROXY_KEYS, settings.proxy_url))
+        env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1,::1"
+    elif settings.proxy_mode == "direct":
+        for key in PROXY_KEYS:
+            env.pop(key, None)
+    return env
+
+
+async def spawn(
+    argv: list[str], cwd: Path | None = None, *, env: dict[str, str] | None = None
+):
     task = asyncio.create_task(
         asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,
+            env=env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -39,6 +64,14 @@ async def spawn(argv: list[str], cwd: Path | None = None):
         else:
             await stop_process(proc)
         raise
+    except PermissionError:
+        raise AgyError(
+            "PERMISSION", "无法执行 AGY，请检查可执行权限和服务用户权限。"
+        ) from None
+    except FileNotFoundError:
+        raise AgyError(
+            "NOT_INSTALLED", "无法找到 AGY 可执行文件，请检查 command 配置。"
+        ) from None
     except (OSError, NotImplementedError):
         raise AgyError(
             "LAUNCH", "无法启动 AGY。请检查可执行文件、权限和 Python 子进程支持。"
@@ -111,8 +144,10 @@ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
-async def capture(argv: list[str], timeout: int) -> str:
-    proc = await spawn(argv)
+async def capture(
+    argv: list[str], timeout: int, *, env: dict[str, str] | None = None
+) -> str:
+    proc = await spawn(argv, env=env)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
         if proc.returncode:
@@ -132,29 +167,42 @@ class LaunchInfo:
 
 
 async def discover(settings: Settings) -> LaunchInfo:
-    if settings.command:
-        binary = str(Path(settings.command).expanduser())
-    else:
-        binary = shutil.which("agy") or ""
-        if not binary:
-            for name in ("agy", "agy.exe"):
-                candidate = Path.home() / ".local" / "bin" / name
-                if candidate.is_file():
-                    binary = str(candidate)
-                    break
-    if not binary or not Path(binary).is_file():
+    try:
+        if settings.command:
+            binary = str(Path(settings.command).expanduser())
+        else:
+            binary = shutil.which("agy") or ""
+            if not binary:
+                for name in ("agy", "agy.exe"):
+                    candidate = Path.home() / ".local" / "bin" / name
+                    if candidate.is_file():
+                        binary = str(candidate)
+                        break
+        is_file = bool(binary) and Path(binary).is_file()
+    except PermissionError:
+        raise AgyError(
+            "PERMISSION", "无权访问 AGY 路径，请检查服务用户权限。"
+        ) from None
+    if not is_file:
         raise AgyError(
             "NOT_INSTALLED",
             "未找到 agy。请先安装官方 CLI，或在插件配置填写 command 绝对路径。",
         )
     if Path(binary).suffix.lower() in {".cmd", ".bat"}:
         raise AgyError("CONFIG", "请指定原生 agy.exe，不支持通过 cmd/bat 包装器启动。")
-    version = await capture([binary, "--version"], settings.startup_timeout)
-    help_text = await capture([binary, "acp", "--help"], settings.startup_timeout)
+    if os.name == "posix" and not os.access(binary, os.X_OK):
+        raise AgyError("PERMISSION", "AGY 文件不可执行，请检查文件权限和服务用户。")
+    env = build_child_env(settings)
+    version = await capture([binary, "--version"], settings.startup_timeout, env=env)
+    help_text = await capture(
+        [binary, "acp", "--help"], settings.startup_timeout, env=env
+    )
     required = ("--gemini-dir", "--app-data-dir", "--agent")
     if any(flag not in help_text for flag in required):
         # Some releases list inherited flags only in the global help.
-        help_text += await capture([binary, "--help"], settings.startup_timeout)
+        help_text += await capture(
+            [binary, "--help"], settings.startup_timeout, env=env
+        )
     missing = [flag for flag in required if flag not in help_text]
     if missing:
         raise AgyError("UNSUPPORTED", "AGY 缺少隔离启动参数：" + ", ".join(missing))

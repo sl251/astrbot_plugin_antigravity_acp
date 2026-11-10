@@ -5,6 +5,29 @@
     "default": "",
     "hint": "留空从 PATH 和 ~/.local/bin 查找；否则填写绝对路径。Windows 使用 agy.exe。不要填写参数。"
   },
+  "auth_bridge": {
+    "description": "桥接官方 CLI 登录态",
+    "type": "bool",
+    "default": true,
+    "hint": "只链接当前系统用户的官方 token 文件，不读取或复制内容；关闭后使用纯隔离会话。先在 AstrBot 实际运行环境执行 agy 登录。并发刷新行为未经验证。"
+  },
+  "proxy_mode": {
+    "description": "AGY 网络代理模式",
+    "type": "string",
+    "default": "inherit",
+    "options": [
+      "inherit",
+      "custom",
+      "direct"
+    ],
+    "hint": "inherit：原样继承 AstrBot 环境；custom：使用下方 URL，仅回环地址免代理；direct：移除 AGY 子进程六个 HTTP/SOCKS 环境代理键。仅影响 AGY，保存后重载插件。"
+  },
+  "proxy_url": {
+    "description": "AGY 代理 URL",
+    "type": "string",
+    "default": "",
+    "hint": "custom 必填，如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080，须显式端口；其他模式忽略。Docker 容器内 127.0.0.1 指容器自身。仅影响 AGY 子进程，不覆盖 AstrBot 或图片下载。"
+  },
   "thought_level": {
     "description": "默认思考档位",
     "type": "string",
@@ -124,11 +147,5 @@
     "description": "允许读取的媒体目录（绝对路径，不含符号链接）",
     "type": "list",
     "default": []
-  },
-  "auth_bridge": {
-    "description": "桥接官方 CLI 登录态",
-    "type": "bool",
-    "default": true,
-    "hint": "只链接当前系统用户的官方 token 文件，不读取或复制内容；关闭后使用纯隔离会话。先在 AstrBot 实际运行环境执行 agy 登录。并发刷新行为未经验证。"
   }
 }

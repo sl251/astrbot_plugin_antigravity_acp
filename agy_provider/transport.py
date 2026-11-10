@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError, remote_error
-from .process import spawn, stop_process
+from .process import build_child_env, spawn, stop_process
 
 
 @dataclass
@@ -91,7 +91,7 @@ class AcpClient:
         async with self.close_lock:
             if self.closed:
                 raise AgyError("CLOSED", "AGY 连接已关闭。")
-            self.proc = await spawn(argv, cwd)
+            self.proc = await spawn(argv, cwd, env=build_child_env(self.settings))
             self.reader = asyncio.create_task(self._read(), name="agy:stdout")
             self.stderr_reader = asyncio.create_task(
                 self._drain_stderr(), name="agy:stderr"
