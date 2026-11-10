@@ -1,5 +1,7 @@
 # ACP 原生执行兼容核验
 
+> 历史设计与验收记录：以下版本、测试数量及待办保留当时状态。当前 0.2.0 的认证桥、代理、自检与兼容范围以 [README](../README.md) 和 [CHANGELOG](../CHANGELOG.md) 为准；历史实例成功不替代本次发布验收。
+
 本轮范围：小鱼 AstrBot v4.29.4 + AGY CLI 1.5.2；模型保持 `gemini-3.8-flash`，fallback 保持 `newapi/glm-5.2`。
 
 ## 已确认并修复

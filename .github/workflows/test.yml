@@ -1,0 +1,27 @@
+name: Offline checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install lint tool
+        run: python -m pip install ruff==0.17.4
+      - name: Offline stdlib tests
+        run: python -B -m unittest discover -s tests
+      - name: Configuration defaults
+        run: python -B -m scripts.check_defaults
+      - name: Ruff
+        run: ruff check .

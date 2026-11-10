@@ -41,7 +41,7 @@ def unregister_owned_adapter() -> None:
     "astrbot_plugin_agy_provider",
     "sl251",
     "通过本机 AGY ACP 使用 Gemini 模型",
-    "0.1.0",
+    "0.2.0",
     "https://github.com/sl251/sl251-astrbot-plugin-agy-provider",
 )
 class AgyProviderPlugin(Star):
