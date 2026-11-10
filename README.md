@@ -1,6 +1,6 @@
-<p align="center"><img src="logo.png" width="160" alt="AGY Gemini Provider"></p>
+<p align="center"><img src="logo.png" width="160" alt="AstrBot Antigravity ACP"></p>
 
-# AstrBot AGY Gemini Provider (`astrbot_plugin_agy_provider`)
+# AstrBot Antigravity ACP
 
 把本机已登录的官方 Google Antigravity CLI（`agy`）通过官方 ACP（Agent Client Protocol）协议接入 **AstrBot**，作为原生聊天模型提供商（`agy_acp`）使用。
 
@@ -13,7 +13,7 @@
 ```mermaid
 flowchart LR
     U[消息平台 / WebUI] --> R[AstrBot Runner]
-    R -->|流式 / 普通请求| P[AGY Gemini Provider]
+    R -->|流式 / 普通请求| P[Antigravity ACP]
     P -->|ACP stdio| A["agy acp (独立会话进程)"]
     A -->|MCP tools/call| B["mcp_bridge.py (Unix Socket)"]
     B -->|挂起并交回宿主执行| R
@@ -63,10 +63,12 @@ flowchart LR
 
 ```sh
 # 在 AstrBot 根目录下执行
-git clone --branch main https://github.com/sl251/sl251-astrbot-plugin-agy-provider.git data/plugins/astrbot_plugin_agy_provider
+git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.git data/plugins/astrbot_plugin_agy_provider
 ```
 
-也可直接下载仓库主分支 ZIP 包，在 AstrBot WebUI 插件管理页选择本地上传安装。安装后重启或重载 AstrBot 插件。
+也可直接下载[主分支 ZIP 包](https://github.com/sl251/astrbot_plugin_antigravity_acp/archive/refs/heads/main.zip)，在 AstrBot WebUI 插件管理页选择本地上传安装。安装后重启或重载 AstrBot 插件。
+
+已有安装可直接更新。AstrBot 插件 ID 仍为 `astrbot_plugin_agy_provider`，原有安装目录和配置可继续使用。
 
 ### 3. 无生成自检（推荐）
 
