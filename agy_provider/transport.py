@@ -18,6 +18,42 @@ class Event:
     result: dict | None = None
 
 
+class _AgentTextGuard:
+    """Hold only possible standalone CLI failure lines, including split chunks."""
+
+    markers = (
+        "Agent execution terminated due to error.",
+        "⚠ Agent execution terminated due to error.",
+        "⚠️ Agent execution terminated due to error.",
+    )
+
+    def __init__(self):
+        self.pending = ""
+        self.line_start = True
+
+    def feed(self, text: str, *, final=False) -> str:
+        text = self.pending + text
+        self.pending = ""
+        output = []
+        while text:
+            line, newline, rest = text.partition("\n")
+            if self.line_start:
+                candidate = line.strip()
+                if candidate in self.markers and (newline or final):
+                    raise AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
+                possible = any(
+                    marker.startswith(line.lstrip()) or (candidate == marker)
+                    for marker in self.markers
+                )
+                if not newline and not final and possible:
+                    self.pending = line
+                    break
+            output.append(line + newline)
+            self.line_start = bool(newline)
+            text = rest
+        return "".join(output)
+
+
 class AcpClient:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -40,6 +76,7 @@ class AcpClient:
         self.permission_errors: list[str] = []
         self.prompt_deadline = 0
         self.prompt_terminal = False
+        self.text_guard = _AgentTextGuard()
 
     @property
     def alive(self) -> bool:
@@ -173,6 +210,10 @@ class AcpClient:
                         await self._reject_request(obj)
                     elif obj["method"] == "session/update":
                         self._on_update(obj.get("params"))
+                    elif obj["method"] in {"session/error", "session/agent_error"}:
+                        params = obj.get("params")
+                        if self._current_update(params):
+                            raise remote_error(params.get("error", params))
                 else:
                     request_id = obj.get("id")
                     if type(request_id) is not int:
@@ -219,17 +260,22 @@ class AcpClient:
             }
         await self._write(reply)
 
+    def _current_update(self, params: object) -> bool:
+        return (
+            isinstance(params, dict)
+            and params.get("sessionId") == self.session_id
+            and self.active
+        )
+
     def _on_update(self, params: object) -> None:
-        if (
-            not isinstance(params, dict)
-            or params.get("sessionId") != self.session_id
-            or not self.active
-        ):
+        if not self._current_update(params):
             return
         update = params.get("update", {})
         if not isinstance(update, dict):
             return
         kind = update.get("sessionUpdate")
+        if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
+            raise remote_error(update.get("error", update))
         if kind in {"tool_call", "tool_call_update"}:
             if self.tool_broker is not None:
                 self.tool_broker.observe(update)
@@ -250,6 +296,8 @@ class AcpClient:
         self.output_bytes += len(text.encode())
         if self.output_bytes > self.settings.max_output_bytes:
             raise AgyError("OUTPUT_LIMIT", "AGY 本轮输出超过插件字节上限。")
+        if kind == "agent_message_chunk":
+            text = self.text_guard.feed(text)
         if text:
             try:
                 self.events.put_nowait(Event(kinds[kind], text))
@@ -263,6 +311,7 @@ class AcpClient:
             raise AgyError("BUSY", "同一 ACP 会话不能同时生成。")
         self.events = asyncio.Queue(maxsize=128)
         self.output_bytes = 0
+        self.text_guard = _AgentTextGuard()
         self.active = True
         self.prompt_terminal = False
         self.prompt_deadline = (
@@ -313,6 +362,22 @@ class AcpClient:
                     continue
                 if response.done():
                     result = await response
+                    if result.get("error") is not None:
+                        raise remote_error(result["error"])
+                    if result.get("stopReason") in {
+                        "error",
+                        "failed",
+                        "failure",
+                        "agent_error",
+                        "execution_error",
+                        "internal_error",
+                    }:
+                        raise AgyError(
+                            "UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。"
+                        )
+                    remaining = self.text_guard.feed("", final=True)
+                    if remaining:
+                        yield Event("text", remaining)
                     completed = True
                     yield Event("done", result=result)
                     return

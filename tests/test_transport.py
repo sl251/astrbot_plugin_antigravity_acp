@@ -28,17 +28,39 @@ for line in sys.stdin:
     elif method == 'session/prompt':
         mode, count = obj['params']['prompt'][0]['text'].split(':')
         frames = []
-        for i in range(int(count)):
+        failure = '⚠ Agent execution terminated due to error.'
+        texts = {
+            'failure_text': [failure],
+            'failure_split': list(failure),
+            'failure_after_text': ['Working...\n', failure],
+            'failure_mention': ['The CLI says "', failure, '" when it fails.'],
+            'failure_followed_by_prose': [failure, ' Please inspect the logs.'],
+            'marker_prefix': ['⚠ Ag'],
+        }.get(mode)
+        for i in range(len(texts) if texts is not None else int(count)):
             kind = 'agent_thought_chunk' if mode == 'mixed' and i % 2 else 'agent_message_chunk'
             frames.append({'jsonrpc': '2.0', 'method': 'session/update', 'params': {
                 'sessionId': 'test', 'update': {'sessionUpdate': kind,
-                'content': {'type': 'text', 'text': str(i) + ','}}}})
+                'content': {'type': 'text', 'text': texts[i] if texts is not None else str(i) + ','}}}})
+        if mode in {'error_event', 'foreign_error'}:
+            frames.append({'jsonrpc': '2.0', 'method': 'session/update', 'params': {
+                'sessionId': 'other' if mode == 'foreign_error' else 'test',
+                'update': {'sessionUpdate': 'agent_error', 'error': {'message': 'private upstream detail'}}}})
+        if mode == 'error_method':
+            frames.append({'jsonrpc': '2.0', 'method': 'session/error', 'params': {
+                'sessionId': 'test', 'error': {'message': 'private upstream detail'}}})
         if mode == 'permission':
             frames.append({'jsonrpc': '2.0', 'id': 'permission',
                            'method': 'session/request_permission', 'params': {}})
-        else:
+        elif mode == 'rpc_error':
             frames.append({'jsonrpc': '2.0', 'id': obj['id'],
-                           'result': {'stopReason': 'end_turn'}})
+                           'error': {'code': -32603, 'message': 'private upstream detail'}})
+        else:
+            result = {'stopReason': 'failed' if mode == 'error_stop' else 'end_turn'}
+            if mode == 'error_result':
+                result['error'] = {'message': 'private upstream detail'}
+            frames.append({'jsonrpc': '2.0', 'id': obj['id'],
+                           'result': result})
         sys.stdout.write('\n'.join(json.dumps(x) for x in frames) + '\n')
         sys.stdout.flush()
         if mode == 'permission':
@@ -117,6 +139,71 @@ class TransportRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rest), 100)
         self.assertEqual(first.text, "0,")
         self.assertEqual(rest[-1].kind, "done")
+
+    async def assert_upstream_failure(self, mode):
+        events = []
+        with self.assertRaisesRegex(AgyError, "UPSTREAM") as caught:
+            async for event in self.client.generate(f"{mode}:0"):
+                events.append(event)
+        self.assertNotIn("private upstream detail", str(caught.exception))
+        self.assertNotIn("done", [event.kind for event in events])
+        self.assertFalse(self.client.pending)
+        self.assertFalse(self.client.active)
+        return events
+
+    async def test_agent_failure_text_is_not_a_completion(self):
+        self.assertEqual(await self.assert_upstream_failure("failure_text"), [])
+
+    async def test_agent_failure_text_split_at_every_character_is_held(self):
+        self.assertEqual(await self.assert_upstream_failure("failure_split"), [])
+
+    async def test_agent_failure_after_normal_text_never_yields_warning(self):
+        events = await self.assert_upstream_failure("failure_after_text")
+        self.assertEqual("".join(event.text for event in events), "Working...\n")
+
+    async def test_quoted_failure_text_remains_normal_text(self):
+        events = [event async for event in self.client.generate("failure_mention:0")]
+        self.assertEqual(
+            "".join(event.text for event in events),
+            'The CLI says "⚠ Agent execution terminated due to error." when it fails.',
+        )
+        self.assertEqual(events[-1].kind, "done")
+
+    async def test_failure_phrase_with_explanatory_prose_is_not_a_status_line(self):
+        events = [
+            event async for event in self.client.generate("failure_followed_by_prose:0")
+        ]
+        self.assertEqual(
+            "".join(event.text for event in events),
+            "⚠ Agent execution terminated due to error. Please inspect the logs.",
+        )
+        self.assertEqual(events[-1].kind, "done")
+
+    async def test_partial_marker_flushes_and_guard_resets_next_prompt(self):
+        first = [event async for event in self.client.generate("marker_prefix:0")]
+        second = [event async for event in self.client.generate("text:1")]
+        self.assertEqual("".join(event.text for event in first), "⚠ Ag")
+        self.assertEqual("".join(event.text for event in second), "0,")
+
+    async def test_explicit_agent_error_event_raises(self):
+        await self.assert_upstream_failure("error_event")
+
+    async def test_session_error_notification_raises(self):
+        await self.assert_upstream_failure("error_method")
+
+    async def test_other_session_error_is_ignored(self):
+        events = [event async for event in self.client.generate("foreign_error:1")]
+        self.assertEqual([event.kind for event in events], ["text", "done"])
+        self.assertIsNone(self.client.failed)
+
+    async def test_prompt_error_result_raises_even_with_end_turn(self):
+        await self.assert_upstream_failure("error_result")
+
+    async def test_prompt_error_stop_reason_raises(self):
+        await self.assert_upstream_failure("error_stop")
+
+    async def test_json_rpc_error_remains_an_exception(self):
+        await self.assert_upstream_failure("rpc_error")
 
 
 if __name__ == "__main__":
