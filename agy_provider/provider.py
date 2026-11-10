@@ -22,7 +22,7 @@ from .tool_turn import chat_events
 from .tools import ToolSnapshot
 
 PROVIDER_TYPE = "agy_acp"
-OWNER = "sl251/astrbot_plugin_agy_provider"
+OWNER = "sl251/astrbot_plugin_antigravity_acp"
 DEFAULT_CONFIG = {
     "id": PROVIDER_TYPE,
     "type": PROVIDER_TYPE,

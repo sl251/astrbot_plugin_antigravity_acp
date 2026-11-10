@@ -2,7 +2,7 @@
 
 # AstrBot Antigravity ACP
 
-当前版本 [v0.3.2](CHANGELOG.md#032)。
+当前版本 [v0.3.3](CHANGELOG.md#033)。
 
 把本机已登录的官方 Google Antigravity CLI（`agy`）通过官方 ACP（Agent Client Protocol）协议接入 **AstrBot**，作为原生聊天模型提供商（`agy_acp`）使用。
 
@@ -24,7 +24,7 @@ flowchart LR
 | 环节 | 做法 |
 |---|---|
 | **进程与登录态** | 由插件按需启动本机官方 `agy acp` 子进程，凭据留在官方 CLI 与系统凭据库（Linux Keyring / macOS 钥匙串 / Windows 凭据管理器），Provider 配置无需填写 URL 或 API Key |
-| **安全隔离** | 每个会话使用位于 `data/plugin_data/astrbot_plugin_agy_provider/` 下的受限 `--gemini-dir`、`--app-data-dir` 与受限 `--agent` 配置；**禁用 AGY 全部内置文件/终端工具**，任何 ACP 本地文件、终端或权限请求一律拒绝 |
+| **安全隔离** | 每个会话使用位于 `data/plugin_data/astrbot_plugin_antigravity_acp/` 下的受限 `--gemini-dir`、`--app-data-dir` 与受限 `--agent` 配置；**禁用 AGY 全部内置文件/终端工具**，任何 ACP 本地文件、终端或权限请求一律拒绝 |
 | **模型与思考** | 自动从 `agy acp` 读取当前账号实际可用的 Gemini 模型列表；支持普通与流式回复、独立思考过程（Reasoning）输出，以及 `default` / `low` / `medium` / `high` 四档思考强度 |
 | **会话与历史** | 按 `Provider 实例 + AstrBot session_id + conversation_id` 绑定独立会话进程；历史前缀一致时直接复用同一 ACP 会话，发生上下文压缩、编辑、切换模型/人格或进程回收后，按 AstrBot 权威历史以带角色的 JSON 转录重建 |
 | **原生工具桥** | 启用 `enable_tools` 后，通过本地 Unix Socket MCP 桥（`mcp_bridge.py`）将工具调用交回 AstrBot 原生执行器处理，支持 `FunctionTool`、`MCPTool`、`HandoffTool` 及直接发送型插件（如语音 TTS），并自动将 `skills_like` 适配为 `full` 模式 |
@@ -61,16 +61,16 @@ flowchart LR
 
 ### 2. 安装插件
 
-将本仓库克隆或解压到 AstrBot 数据目录的 `data/plugins/astrbot_plugin_agy_provider` 下（确保该目录下直接包含 `main.py`、`metadata.yaml` 和 `agy_provider/`，不要多套一层文件夹）：
+将本仓库克隆或解压到 AstrBot 数据目录的 `data/plugins/astrbot_plugin_antigravity_acp` 下（确保该目录下直接包含 `main.py`、`metadata.yaml` 和 `agy_provider/`，不要多套一层文件夹）：
 
 ```sh
 # 在 AstrBot 根目录下执行
-git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.git data/plugins/astrbot_plugin_agy_provider
+git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.git data/plugins/astrbot_plugin_antigravity_acp
 ```
 
 也可直接下载[主分支 ZIP 包](https://github.com/sl251/astrbot_plugin_antigravity_acp/archive/refs/heads/main.zip)，在 AstrBot WebUI 插件管理页选择本地上传安装。安装后重启或重载 AstrBot 插件。
 
-已有安装可直接更新。AstrBot 插件 ID 仍为 `astrbot_plugin_agy_provider`，原有安装目录和配置可继续使用。
+从 v0.3.2 或更早版本迁移时，先停用旧插件，再按新目录安装。新旧插件共用 `agy_acp` 模型提供商类型。要迁移插件设置，可在 AstrBot 停止时将旧的 `data/config/astrbot_plugin_agy_provider_config.json` 复制为 `data/config/astrbot_plugin_antigravity_acp_config.json`。如果之前使用自定义安装目录，旧配置文件名以实际目录名开头。已有新版配置时，请在 WebUI 中合并所需设置。
 
 ### 3. 无生成自检（推荐）
 
@@ -165,7 +165,7 @@ Docker 用户需同时注意：
 - **合规与安全边界**：插件仅通过官方 CLI 的标准 `acp` 协议通信，不实现客户端身份伪装、不修改官方二进制、不提供多账号池或 OAuth 反向代理。使用范围请遵循 Google 官方条款。
 - **凭据刷新**：官方 token 的自然刷新与并发刷新行为尚未长期验证；短会话成功不证明长期刷新可靠。建议同一账号避免 CLI 与插件并发高频使用。
 - **采样参数不生效**：由于 ACP 协议未开放采样参数通道，AstrBot 中的 `temperature`、`top_p`、`max_tokens` 等参数不会传递给 `agy`。
-- **数据目录切勿整目录删除**：会话运行目录位于 `data/plugin_data/astrbot_plugin_agy_provider/`。正常退出时插件会自动清理临时会话目录；若容器或实例在同一数据树下配置了持久化认证状态，**请勿直接删空整个 `astrbot_plugin_agy_provider` 数据目录**，以免丢失登录态。官方 token 位于独立认证目录，勿作为临时文件删除。
+- **数据目录切勿整目录删除**：会话运行目录位于 `data/plugin_data/astrbot_plugin_antigravity_acp/`。正常退出时插件会自动清理临时会话目录；若容器或实例在同一数据树下配置了持久化认证状态，**请勿直接删空整个 `astrbot_plugin_antigravity_acp` 数据目录**，以免丢失登录态。官方 token 位于独立认证目录，勿作为临时文件删除。
 - **工具调用边界**：
   - 仅支持 `tool_choice="auto"` 或 `"none"`，不支持强制指定函数（`required`）。
   - 工具返回结果仅支持文本或 JSON 文本，不支持工具直接返回二进制/图片块。

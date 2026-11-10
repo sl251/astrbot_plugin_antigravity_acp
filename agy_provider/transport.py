@@ -107,7 +107,7 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.3.2"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.3.3"},
                 },
                 self.settings.startup_timeout,
             )

@@ -12,4 +12,4 @@ def plugin_data_root(base: Path | None = None) -> Path:
             base = Path.cwd() / "data" / "plugin_data"
         else:
             base = Path(get_astrbot_plugin_data_path())
-    return base / "astrbot_plugin_agy_provider"
+    return base / "astrbot_plugin_antigravity_acp"
