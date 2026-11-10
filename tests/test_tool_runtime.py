@@ -212,6 +212,188 @@ class ToolRuntimeTests(unittest.IsolatedAsyncioTestCase):
             request(history + [{"role": "user", "content": "next"}]).hashes[:-1],
         )
 
+    async def test_continuation_allows_injected_or_compacted_prefix(self):
+        original = [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": "current question"},
+        ]
+        prefixes = [
+            [*original[:-1], {"role": "user", "content": "current question\nMemory"}],
+            original[-1:],
+            [
+                {"role": "user", "content": "Summary of older context"},
+                {"role": "assistant", "content": "Summary acknowledged"},
+                original[-1],
+            ],
+        ]
+        for index, prefix in enumerate(prefixes):
+            with self.subTest(prefix=prefix):
+                key = f"rebuilt-{index}"
+                event = (await self.collect(original, key=key))[-1]
+                history = copy.deepcopy(prefix) + exchange(event, "HOST-RESULT")
+                final = await self.collect(history, key=key, continuation=True)
+                self.assertEqual(
+                    "".join(e.text for e in final if e.kind == "text"),
+                    "Answer: HOST-RESULT",
+                )
+                self.assertEqual(event.result["call"].state, "completed")
+                # Prefix edits were never sent to the original ACP prompt.
+                self.assertEqual(
+                    self.runtime.sessions[key].expected[:-1],
+                    request(
+                        original + exchange(event, "HOST-RESULT"), continuation=True
+                    ).hashes,
+                )
+        self.assertEqual(len(self.records("prompt_started")), 3)
+        self.assertEqual(len(self.records("mcp_result")), 3)
+
+    async def test_rewritten_continuation_rebuilds_session_on_next_user_turn(self):
+        original = [{"role": "user", "content": "first question"}]
+        event = (await self.collect(original))[-1]
+        revised = [{"role": "user", "content": "first question\nNew memory"}]
+        revised.extend(exchange(event, "first result"))
+        final = await self.collect(revised, continuation=True)
+        revised.append(
+            {
+                "role": "assistant",
+                "content": "".join(e.text for e in final if e.kind == "text"),
+            }
+        )
+        old_session = event.result["client"].session_id
+        await self.roundtrip(revised, "next question")
+        self.assertNotEqual(
+            self.runtime.sessions["group-a"].client.session_id, old_session
+        )
+        self.assertEqual(len(self.records("session_new")), 2)
+
+    async def test_continuation_rejects_tampered_calls_and_foreign_tool_records(self):
+        prior_exchange = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "old-id",
+                        "function": {
+                            "name": "echo_probe",
+                            "arguments": {"message": "old"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "old-id", "content": "old result"},
+        ]
+        original = [
+            {"role": "user", "content": "old question"},
+            *prior_exchange,
+            {"role": "user", "content": "current question"},
+        ]
+        for index, mode in enumerate(
+            ("name", "args", "id", "text", "foreign", "old-call", "old-result")
+        ):
+            with self.subTest(mode=mode):
+                key = f"tampered-{index}"
+                event = (await self.collect(original, key=key))[-1]
+                history = copy.deepcopy(original) + exchange(event, "untrusted")
+                function = history[-2]["tool_calls"][0]["function"]
+                if mode == "name":
+                    function["name"] = "another_tool"
+                elif mode == "args":
+                    function["arguments"] = {"message": "changed"}
+                elif mode == "id":
+                    history[-2]["tool_calls"][0]["id"] = "foreign-id"
+                    history[-1]["tool_call_id"] = "foreign-id"
+                elif mode == "text":
+                    history[-2]["content"] = "invented assistant text"
+                elif mode == "foreign":
+                    foreign = copy.deepcopy(prior_exchange)
+                    foreign[0]["tool_calls"][0]["id"] = "foreign-id"
+                    foreign[1]["tool_call_id"] = "foreign-id"
+                    history[-2:-2] = foreign
+                elif mode == "old-call":
+                    history[1]["tool_calls"][0]["function"]["name"] = "another_tool"
+                else:
+                    history[2]["content"] = "changed old result"
+                with self.assertRaisesRegex(AgyError, "TOOL_HISTORY"):
+                    await self.collect(history, key=key, continuation=True)
+                self.assertTrue(event.result["broker"].closed)
+                self.assertEqual(event.result["call"].state, "unknown")
+                self.assertNotIn(key, self.runtime.turns)
+        self.assertFalse(
+            any("result" in row["result"] for row in self.records("mcp_result"))
+        )
+
+    async def test_foreign_conversation_result_cannot_resume_own_pending_call(self):
+        first_history = [{"role": "user", "content": "conversation A"}]
+        second_history = [{"role": "user", "content": "conversation B"}]
+        first = (await self.collect(first_history, key="conversation-a"))[-1]
+        second = (await self.collect(second_history, key="conversation-b"))[-1]
+        foreign = second_history + exchange(first, "result from A")
+        with self.assertRaisesRegex(AgyError, "TOOL_HISTORY"):
+            await self.collect(foreign, key="conversation-b", continuation=True)
+        self.assertTrue(second.result["broker"].closed)
+        self.assertFalse(first.result["broker"].closed)
+        final = await self.collect(
+            first_history + exchange(first, "own result"),
+            key="conversation-a",
+            continuation=True,
+        )
+        self.assertEqual(
+            "".join(e.text for e in final if e.kind == "text"), "Answer: own result"
+        )
+
+    async def test_incomplete_duplicate_or_misbound_result_never_resumes(self):
+        for index, mode in enumerate(
+            ("missing", "duplicate", "wrong-id", "wrong-role", "reversed")
+        ):
+            with self.subTest(mode=mode):
+                key = f"invalid-result-{index}"
+                original = [{"role": "user", "content": "question"}]
+                event = (await self.collect(original, key=key))[-1]
+                history = original + exchange(event, "untrusted result")
+                if mode == "missing":
+                    history.pop()
+                elif mode == "duplicate":
+                    history.append(copy.deepcopy(history[-1]))
+                elif mode == "wrong-id":
+                    history[-1]["tool_call_id"] = "foreign-id"
+                elif mode == "wrong-role":
+                    history[-1]["role"] = "user"
+                else:
+                    history[-2:] = list(reversed(history[-2:]))
+                with self.assertRaisesRegex(AgyError, "TOOL_HISTORY"):
+                    await self.collect(history, key=key, continuation=True)
+                self.assertFalse(event.result["call"].future.done())
+                await self.runtime.turns[key].close()
+        self.assertFalse(
+            any("result" in row["result"] for row in self.records("mcp_result"))
+        )
+
+    async def test_prefix_can_be_compacted_again_between_two_handoffs(self):
+        self.runtime.settings = replace(self.settings, tool_max_concurrent=2)
+        original = [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": "parallel:compaction"},
+        ]
+        first = (await self.collect(original))[-1]
+        first_result = "HOST::" + first.result["call"].arguments["message"]
+        compacted = original[-1:] + exchange(first, first_result)
+        second = (await self.collect(compacted, continuation=True))[-1]
+        self.assertEqual(second.kind, "tools")
+        # The next compaction removes even the exchange accepted just above.
+        second_result = "HOST::" + second.result["call"].arguments["message"]
+        final = await self.collect(
+            original[-1:] + exchange(second, second_result), continuation=True
+        )
+        self.assertEqual(
+            "".join(e.text for e in final if e.kind == "text"),
+            "Answer: HOST::parallel:compaction/a | HOST::parallel:compaction/b",
+        )
+        self.assertEqual(len(self.records("prompt_started")), 1)
+        self.assertEqual(len(self.records("mcp_result")), 2)
+
     async def test_schema_change_rebuilds_without_reusing_old_permissions(self):
         history = []
         await self.roundtrip(history, "first")

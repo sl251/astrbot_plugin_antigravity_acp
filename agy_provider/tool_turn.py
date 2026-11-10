@@ -8,6 +8,56 @@ from .messages import canonical_calls
 from .transport import Event
 
 
+def _continuation_exchange(messages, baseline, call, text):
+    """Authenticate the pending exchange independently of host history rewrites.
+
+    Only the located result is sent to the retained ACP prompt. Older prose may
+    change or disappear, but tool records must belong to the original history
+    or an exchange already accepted by this turn; foreign results are rejected.
+    Inputs have already been normalized and checked for closed, unique IDs.
+    """
+    expected = canonical_calls(
+        [{"id": call.id, "function": {"name": call.name, "arguments": call.arguments}}]
+    )
+    calls_at, results_at = [], []
+    for index, message in enumerate(messages):
+        calls_at.extend(
+            index for item in message.get("tool_calls", []) if item["id"] == call.id
+        )
+        if message.get("role") == "tool" and message.get("tool_call_id") == call.id:
+            results_at.append(index)
+    if (
+        calls_at != [len(messages) - 2]
+        or results_at != [len(messages) - 1]
+        or messages[-2]
+        != {"role": "assistant", "content": text, "tool_calls": expected}
+    ):
+        raise AgyError(
+            "TOOL_HISTORY", "工具续轮缺少唯一、完整且匹配的已审计调用/结果。"
+        )
+
+    known_calls = {
+        item["id"]: item
+        for message in baseline
+        for item in message.get("tool_calls", [])
+    }
+    known_results = {
+        message["tool_call_id"]: message
+        for message in baseline
+        if message["role"] == "tool"
+    }
+    for message in messages[:-2]:
+        if any(
+            item != known_calls.get(item["id"])
+            for item in message.get("tool_calls", [])
+        ) or (
+            message["role"] == "tool"
+            and message != known_results.get(message.get("tool_call_id"))
+        ):
+            raise AgyError("TOOL_HISTORY", "工具续轮混入了未审计或被改写的工具记录。")
+    return messages[-2:]
+
+
 class ToolTurn:
     def __init__(
         self, runtime, request, key, model, effort, snapshot, signal, approver=None
@@ -168,34 +218,15 @@ class ToolTurn:
         ):
             raise AgyError("TOOL_CONTEXT", "工具续轮身份、人格、模型或许可发生变化。")
         call = self.waiting["call"]
-        base = self.request.messages
-        expected_call = canonical_calls(
-            [
-                {
-                    "id": call.id,
-                    "function": {"name": call.name, "arguments": call.arguments},
-                }
-            ]
+        exchange = _continuation_exchange(
+            request.messages, self.request.messages, call, "".join(self.segment)
         )
-        tail = request.messages[len(base) :]
-        if (
-            request.messages[: len(base)] != base
-            or len(tail) != 2
-            or tail[0]
-            != {
-                "role": "assistant",
-                "content": "".join(self.segment),
-                "tool_calls": expected_call,
-            }
-            or tail[1]["role"] != "tool"
-            or tail[1].get("tool_call_id") != call.id
-        ):
-            raise AgyError(
-                "TOOL_HISTORY", "工具续轮必须精确匹配已审计的完整调用/结果。"
-            )
-        self.waiting["broker"].resolve(call.id, tail[1]["content"])
+        self.waiting["broker"].resolve(call.id, exchange[1]["content"])
         self.request.consumed_text += "".join(self.segment)
-        self.request.messages = request.messages
+        # Track what the retained ACP prompt actually saw. If the host rewrote
+        # its prefix, the next user turn must rebuild instead of falsely reusing
+        # a session whose context never received those edits.
+        self.request.messages.extend(copy.deepcopy(exchange))
         self.resume.set()
 
     async def events(self):
