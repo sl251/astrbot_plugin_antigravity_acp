@@ -14,7 +14,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
     def test_auth_required_is_redacted(self):
         for error in (
             "Authentication required: private-example",
-            {"code": -32000, "message": "private-example"},
+            {"code": -32000, "message": "Authentication required private-example"},
         ):
             with self.subTest(error=error):
                 classified = remote_error(error)
@@ -42,7 +42,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
             "agy_provider.probe.discover",
             side_effect=AgyError("NOT_INSTALLED", "private-example"),
         ):
-            report = await probe(Settings())
+            report = await probe(Settings(auth_bridge=False))
         self.assertEqual(report["stage"], "discovery")
         self.assertEqual(report["error_code"], "NOT_INSTALLED")
         self.assertNotIn("private-example", json.dumps(report))
@@ -53,6 +53,13 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                 client = AsyncMock()
                 client.capabilities = {"promptCapabilities": {"image": True}}
                 client.new_session.side_effect = failure
+                client.new_session.return_value = {
+                    "models": {
+                        "availableModels": [
+                            {"modelId": "gemini-fake", "name": "Gemini"}
+                        ]
+                    }
+                }
                 with (
                     patch(
                         "agy_provider.probe.discover",
@@ -60,7 +67,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     patch("agy_provider.probe.AcpClient", return_value=client),
                 ):
-                    report = await probe(Settings())
+                    report = await probe(Settings(auth_bridge=False))
                 client.close.assert_awaited_once()
                 client.generate.assert_not_called()
                 home = client.start.call_args.args[1].parent

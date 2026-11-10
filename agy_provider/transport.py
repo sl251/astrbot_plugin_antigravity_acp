@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import re
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Settings
-from .errors import AgyError, remote_error
+from .errors import AgyError, classified_error, remote_error
 from .process import build_child_env, spawn, stop_process
 
 
@@ -77,6 +79,9 @@ class AcpClient:
         self.prompt_deadline = 0
         self.prompt_terminal = False
         self.text_guard = _AgentTextGuard()
+        self.stage = "idle"
+        self.diagnostic_epoch = 0
+        self.stderr_diagnostics = deque(maxlen=32)
 
     @property
     def alive(self) -> bool:
@@ -131,6 +136,19 @@ class AcpClient:
                 raise AgyError("TRANSPORT", "AGY 输入管道已关闭。") from None
 
     async def request(self, method: str, params: dict, timeout: int) -> dict:
+        self.stage = (
+            method
+            if method
+            in {
+                "initialize",
+                "session/new",
+                "session/set_config_option",
+                "session/prompt",
+            }
+            else "rpc"
+        )
+        self.diagnostic_epoch += 1
+        self.stderr_diagnostics.clear()
         self.next_id += 1
         request_id = self.next_id
         future = asyncio.get_running_loop().create_future()
@@ -150,7 +168,9 @@ class AcpClient:
                 raise AgyError("PROTOCOL", "ACP 返回了非对象结果。")
             return result
         except TimeoutError:
-            raise AgyError("TIMEOUT", f"ACP {method} 超时。") from None
+            raise self._diagnose(
+                AgyError("TIMEOUT", f"ACP {self.stage} 超时。")
+            ) from None
         finally:
             self.pending.pop(request_id, None)
             if not future.done():
@@ -182,8 +202,29 @@ class AcpClient:
             self.settings.startup_timeout,
         )
 
+    def _diagnose(self, error: AgyError) -> AgyError:
+        # Diagnostic stderr is supporting evidence only, never a success veto.
+        # Prefer explicit RPC errors over stderr, including known auth failures.
+        if error.code not in {"UPSTREAM", "TRANSPORT", "TIMEOUT"}:
+            return error
+        priority = (
+            "PROXY_AUTH",
+            "PROXY",
+            "TLS",
+            "NETWORK",
+            "AUTH",
+            "QUOTA",
+            "RATE_LIMIT",
+            "TIMEOUT",
+        )
+        codes = {code for code, stage in self.stderr_diagnostics if stage == self.stage}
+        for code in priority:
+            if code in codes:
+                return classified_error(code, stage=self.stage)
+        return error
+
     def _fail(self, error: AgyError) -> None:
-        self.failed = self.failed or error
+        self.failed = self.failed or self._diagnose(error)
         self.failure_event.set()
         for future in list(self.pending.values()):
             if not future.done():
@@ -221,7 +262,9 @@ class AcpClient:
                     future = self.pending.get(request_id)
                     if future and not future.done():
                         if "error" in obj:
-                            future.set_exception(remote_error(obj["error"]))
+                            future.set_exception(
+                                self._diagnose(remote_error(obj["error"]))
+                            )
                         else:
                             future.set_result(obj.get("result"))
                 # readline() may complete synchronously for a whole buffered
@@ -231,6 +274,10 @@ class AcpClient:
                 # a paused consumer. A truly stalled consumer still hits the
                 # bounded queue and fails closed below.
                 await asyncio.sleep(0)
+            # stdout EOF may be scheduled before the final stderr read. Give
+            # the drain a bounded chance to finish without waiting on a live CLI.
+            if self.stderr_reader and not self.stderr_reader.done():
+                await asyncio.wait({self.stderr_reader}, timeout=0.1)
             self._fail(
                 AgyError("TRANSPORT", "AGY 进程退出或关闭了输出管道，请检查 CLI。")
             )
@@ -243,9 +290,28 @@ class AcpClient:
 
     async def _drain_stderr(self) -> None:
         assert self.proc and self.proc.stderr
-        # Drain continuously; CLI stderr can include prompts or account details.
-        while await self.proc.stderr.read(8192):
-            pass
+        # Raw text exists only in this coroutine's bounded classification window;
+        # the client retains allowlisted categories and fixed stages, never logs.
+        window = b""
+        epoch = self.diagnostic_epoch
+        while chunk := await self.proc.stderr.read(8192):
+            if epoch != self.diagnostic_epoch:
+                window = b""
+                epoch = self.diagnostic_epoch
+            window = (window + chunk)[-16384:]
+            text = window.decode("utf-8", "replace")
+            for line in text.splitlines():
+                # AGY emits this background message even during successful use.
+                code = remote_error(line).code
+                if code == "AUTH" and re.search(r"not.logged.in", line, re.IGNORECASE):
+                    continue
+                if code != "UPSTREAM":
+                    entry = (code, self.stage)
+                    if entry not in self.stderr_diagnostics:
+                        self.stderr_diagnostics.append(entry)
+            # Carry only the incomplete last line across reads; long lines still
+            # have a strict 16 KiB maximum and are never attached to an exception.
+            window = window.rsplit(b"\n", 1)[-1] if b"\n" in window else window
 
     async def _reject_request(self, obj: dict) -> None:
         reply = {"jsonrpc": "2.0", "id": obj["id"]}
@@ -363,7 +429,7 @@ class AcpClient:
                 if response.done():
                     result = await response
                     if result.get("error") is not None:
-                        raise remote_error(result["error"])
+                        raise self._diagnose(remote_error(result["error"]))
                     if result.get("stopReason") in {
                         "error",
                         "failed",
@@ -372,8 +438,8 @@ class AcpClient:
                         "execution_error",
                         "internal_error",
                     }:
-                        raise AgyError(
-                            "UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。"
+                        raise self._diagnose(
+                            AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
                         )
                     remaining = self.text_guard.feed("", final=True)
                     if remaining:
