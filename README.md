@@ -2,6 +2,8 @@
 
 # AstrBot Antigravity ACP
 
+当前版本 [v0.3.1](CHANGELOG.md#031)。
+
 把本机已登录的官方 Google Antigravity CLI（`agy`）通过官方 ACP（Agent Client Protocol）协议接入 **AstrBot**，作为原生聊天模型提供商（`agy_acp`）使用。
 
 **免反代、免 API Key、不逆向、无账号池**——官方客户端直连，规避反代类方案的封号风险，可作为 AstrBot 主模型使用；不依赖 Docker、无需额外 HTTP 网关。登录态留在官方 `agy` 进程与系统凭据库中，插件不提取、不保存也不转发任何 OAuth Token，在 AstrBot WebUI 中免填 API Key 即可直接调用 Gemini 模型、思考流、原生工具与图片输入。
