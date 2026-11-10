@@ -7,7 +7,6 @@ No tool schema/history protocol is changed here, and no native tool is replayed.
 import asyncio
 import copy
 import inspect
-import logging
 import uuid
 from dataclasses import dataclass
 from functools import wraps
@@ -75,13 +74,16 @@ async def _close_matching_turns(provider, signal, logger):
         raise cancelled
 
 
-def install_host_compat(runner_cls=None, *, owner=None, logger=None):
+def install_host_compat(runner_cls=None, *, owner=None, logger):
     """Install once, retaining whatever third-party chain is currently present.
 
+    The plugin entry point supplies the logger from astrbot.api.
     Lazy imports let tests exercise the exact seam without an AstrBot install.
     OWNER must come from the provider source: historical owner strings must not
     broaden this scope. Production callers use the actual constant by default.
     """
+    if logger is None:
+        raise TypeError("logger must be supplied by the caller")
     if runner_cls is None:
         from astrbot.core.agent.runners.tool_loop_agent_runner import (
             ToolLoopAgentRunner,
@@ -97,8 +99,6 @@ def install_host_compat(runner_cls=None, *, owner=None, logger=None):
         if current.owner != owner:
             raise RuntimeError("AGY runner compatibility owner 冲突。")
         return
-    if logger is None:
-        logger = logging.getLogger(__name__)
     state = _Patch(runner_cls.reset, runner_cls.step_until_done, owner, logger)
     signature = inspect.signature(state.reset)
     if not {"provider", "request", "tool_schema_mode"} <= set(signature.parameters):
