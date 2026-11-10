@@ -84,6 +84,7 @@ class ToolRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.log = self.root / "events.jsonl"
         self.settings = Settings(
+            auth_bridge=False,
             enable_tools=True,
             startup_timeout=5,
             request_timeout=15,

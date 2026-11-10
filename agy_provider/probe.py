@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError
+from .models import catalog
+from .paths import plugin_data_root
 from .process import discover, launch_args, make_home
 from .transport import AcpClient
 
@@ -27,41 +29,23 @@ def capability_summary(capabilities: object) -> dict:
     return result
 
 
-async def probe(settings: Settings) -> dict:
+async def probe(settings: Settings, root: Path | None = None) -> dict:
     report = {
         "report_version": 1,
         "status": "blocked",
         "stage": "discovery",
+        "proxy_mode": settings.proxy_mode,
+        "auth_bridge": settings.auth_bridge,
+        "model_catalog": "not_checked",
         "model_prompt_sent": False,
         "mcp_loading": "not_tested",
         "host_tool_loop": "not_tested",
     }
     try:
-        info = await discover(settings)
-        # Do not publish the raw version banner; wrappers may print private data.
-        version = re.fullmatch(
-            r"(?:agy(?: version)?\s+)?v?(\d{1,4}\.\d{1,4}\.\d{1,4})",
-            info.version.strip(),
-            re.IGNORECASE,
-        )
-        report["cli_version"] = version[1] if version else "unrecognized"
-        report["stage"] = "isolation"
-        with tempfile.TemporaryDirectory(prefix="agy-preflight-") as directory:
-            home = make_home(Path(directory), "Preflight only; no generation.")
-            client = AcpClient(settings)
-            try:
-                report["stage"] = "initialize"
-                await client.start(launch_args(info, home), home / "workspace")
-                report["protocol_version"] = 1
-                report["advertised_capabilities"] = capability_summary(
-                    client.capabilities
-                )
-                report["stage"] = "session/new"
-                await client.new_session(home / "workspace")
-            finally:
-                await client.close()
-        report["stage"] = "complete"
-        report["status"] = "passed"
+        async with asyncio.timeout(settings.startup_timeout):
+            await _run_probe(settings, root, report)
+    except TimeoutError:
+        report.setdefault("error_code", "TIMEOUT")
     except AgyError as exc:
         report["error_code"] = exc.code
     except Exception:
@@ -70,16 +54,61 @@ async def probe(settings: Settings) -> dict:
     return report
 
 
+async def _run_probe(settings: Settings, root: Path | None, report: dict) -> None:
+    info = await discover(settings)
+    # Do not publish the raw version banner; wrappers may print private data.
+    version = re.fullmatch(
+        r"(?:agy(?: version)?\s+)?v?(\d{1,4}\.\d{1,4}\.\d{1,4})",
+        info.version.strip(),
+        re.IGNORECASE,
+    )
+    report["cli_version"] = version[1] if version else "unrecognized"
+    report["stage"] = "isolation"
+    root = root if root is not None else plugin_data_root()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix="preflight-", dir=root) as directory:
+        report["stage"] = "authentication"
+        home = make_home(
+            Path(directory), "Preflight only; no generation.", settings=settings
+        )
+        client = AcpClient(settings)
+        try:
+            report["stage"] = "initialize"
+            await client.start(launch_args(info, home), home / "workspace")
+            report["protocol_version"] = 1
+            report["advertised_capabilities"] = capability_summary(client.capabilities)
+            report["stage"] = "session/new"
+            result = await client.new_session(home / "workspace")
+            report["stage"] = "model_catalog"
+            report["model_count"] = len(catalog(result))
+            report["model_catalog"] = "available"
+        except asyncio.CancelledError:
+            # The total budget cancels a pending RPC before its own timeout
+            # handler runs. Keep its allowlisted evidence before closing it;
+            # an external cancellation still propagates without a report.
+            report["error_code"] = client._diagnose(
+                AgyError("TIMEOUT", "无生成自检超时。")
+            ).code
+            raise
+        finally:
+            await client.close()
+    report["stage"] = "complete"
+    report["status"] = "passed"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--command", default="", help="Absolute official AGY path")
     parser.add_argument("--timeout", type=int, default=30, choices=range(5, 301))
+    parser.add_argument(
+        "--data-root", type=Path, help="Same plugin data root as Runtime"
+    )
     args = parser.parse_args()
     try:
         settings = Settings.from_dict(
             {"command": args.command, "startup_timeout": args.timeout}
         )
-        report = asyncio.run(probe(settings))
+        report = asyncio.run(probe(settings, root=args.data_root))
     except AgyError:
         report = {"status": "blocked", "stage": "configuration", "error_code": "CONFIG"}
     except KeyboardInterrupt:

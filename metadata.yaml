@@ -1,7 +1,12 @@
 name: astrbot_plugin_agy_provider
 display_name: AGY Gemini Provider
-desc: 通过本机已登录的官方 AGY CLI，将 Gemini 作为 AstrBot 原生文本模型使用，无需 Docker。
-version: v0.1.0
+short_desc: 通过已登录的本机官方 AGY CLI 使用 Gemini 模型
+desc: 通过本机官方 AGY CLI 的 ACP 接入 Gemini；需先在 AstrBot 同一运行用户和环境中安装 CLI 并完成 agy 登录，无需填写 API Key。
+version: 0.2.0
 author: sl251
 repo: https://github.com/sl251/sl251-astrbot-plugin-agy-provider
-astrbot_version: ">=4.29.4,<5"
+astrbot_version: ">=4.29.4,<4.30"
+tags:
+  - Gemini
+  - Provider
+  - ACP

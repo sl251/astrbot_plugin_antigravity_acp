@@ -1,6 +1,8 @@
 # 测试交接
 
-## M0 首批交付（当前）
+> 历史设计与验收记录：以下版本、测试数量及待办保留当时状态。当前 0.2.0 的认证桥、代理、自检与兼容范围以 [README](../README.md) 和 [CHANGELOG](../CHANGELOG.md) 为准；历史实例成功不替代本次发布验收。
+
+## M0 首批交付（历史记录）
 
 - 设计与后续真实测试步骤见 [TOOL_BRIDGE_DESIGN.md](TOOL_BRIDGE_DESIGN.md)。路线 B 为待验证主路线，M0 尚未放行，工具/图片继续关闭。
 - 本次环境：Linux x86_64、Python 3.12.14、Ruff 0.17.4；未安装 AGY 或启动 AstrBot，无测试账号。预检在 discovery 返回 NOT_INSTALLED，未发送模型 prompt。

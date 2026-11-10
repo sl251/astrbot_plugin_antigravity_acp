@@ -150,6 +150,7 @@ class ProviderContracts(unittest.IsolatedAsyncioTestCase):
         self.module = load_provider(self.root)
         self.module.configure(
             Settings(
+                auth_bridge=False,
                 enable_tools=True,
                 enable_images=True,
                 media_roots=(str(self.root),),
