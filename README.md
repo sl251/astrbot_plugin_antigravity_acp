@@ -1,254 +1,212 @@
-<p align="center"><img src="logo.png" width="160" alt="AstrBot Antigravity ACP"></p>
+```markdown
+<p align="center">
+  <img src="logo.png" width="160" alt="AstrBot Antigravity ACP" />
+</p>
 
-# AstrBot Antigravity ACP
+# AstrBot Antigravity ACP (`astrbot_plugin_antigravity_acp`)
 
-当前版本 [v0.4.2](CHANGELOG.md#042)。
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
+![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
+![Status](https://img.shields.io/badge/Status-Active%20(v0.4.2)-brightgreen)
 
-把本机已登录的官方 Google Antigravity CLI（`agy`）通过官方 ACP（Agent Client Protocol）协议接入 **AstrBot**，作为原生聊天模型提供商（`agy_acp`）使用。
-
-通过官方客户端连接，无需 API Key 或额外 HTTP 网关，可作为 AstrBot 主模型使用。首次设置页面提供环境检测、官方登录和模型保存引导。登录态由官方 `agy` 与其认证后端维护，插件不提取、保存或转发 OAuth Token。支持 Gemini 模型、思考流，以及按配置开启的宿主工具和图片输入；使用须遵循官方服务条款。
+通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
 ---
 
-## 工作方式
+## 💡 为什么这份 README 分成了两部分？
+
+现在大家装插件、查报错或者改代码，很多时候会直接把仓库丢给 Claude Code、Cursor 或者各种 AI 助手。但**人类和 AI 读文档的需求完全是反过来的**：
+- **人类看文档**：只想知道这插件干嘛用的、会不会封号、怎么用最快的速度跑起来，不想一上来就被密密麻麻的底层协议和目录树劝退。
+- **AI 看文档**：不需要听背景故事，它需要的是高密度的架构契约、参数边界、文件路径和排障决策树，这样才不会在帮你配置或改代码时瞎猜（产生幻觉）。
+
+所以这份文档一分为二。**如果你在安装使用中遇到问题，可以直接把本仓库链接或 README 丢给你的 AI 助手，让它直接读取下半部分帮你排查。**
+
+📖 **快速跳转**：
+- [👤 给人类看的说明（背景定位 / 核心优势 / 安装教程 / 避坑事项）](#-给人类看的说明)
+- [🤖 给 Agent 看的上下文（架构契约 / 配置规范 / 排障 SOP）](#-给-agent-看的上下文)
+
+---
+
+# 👤 给人类看的说明
+
+## 1. 背景与定位
+
+前阵子在 L 站看到大佬写的 `dsh-antigravity-acp`，直接调官方 CLI 走标准协议通信，思路非常干净。我看了一眼 AstrBot 的插件市场，发现还没有类似的实现，就参考这个思路搬运并适配了一版。
+
+做这个插件最大的动力，其实是因为**我自己被 Google 杀号杀怕了**。
+
+折腾过反代、抓包提取 OAuth Token、或者接过各种野生号池的朋友应该都懂，账号风控是玄学，哪天睡醒号就没了。所以这个插件从立项开始就定死了路线：**只走官方客户端留的正常接口，不碰任何逆向和黑科技。**
+
+### 明确一下本插件的边界（做什么 vs 不做什么）
+
+| ✅ 这个插件做什么 | ❌ 这个插件坚决不做什么（过去没有，以后也不加） |
+| :--- | :--- |
+| 调用本机安装的官方 `agy` 客户端，走标准 stdio 管道通信 | **不做号池切换与多号轮询**：单实例只绑定当前机器登录的一个账号 |
+| 把 AstrBot 的对话、图片和工具调用桥接给 `agy` | **不做上下文破限**：原样传递 AstrBot 上下文，不塞任何破限提示词 |
+| 提供 WebUI 向导，辅助完成官方登录和模型选择 | **不做客户端伪造**：不拦截篡改流量，不伪装其他 IDE 指纹 |
+| 隔离运行目录，锁死 `agy` 自带的本地高危工具 | **不提取 OAuth Token**：插件不读写账号凭证，登录态全归官方客户端管 |
+
+---
+
+## 2. 核心优势
+
+Google 官方的命令行工具 `agy` 自带了一个 `agy acp` 子命令。本插件的作用就是在后台拉起你本机的 `agy`，把 AstrBot 的消息传过去，再把回复接回来。
+
+相比传统的反代方案，这样做有几个实在的好处：
+1. **不反代、不违规、保号优先**：全程调用本机官方客户端完成通信，没有第三方中转，最大程度降低风控风险。
+2. **免 API Key、免额外部署**：不需要申请 API Key，也不用再单独起一个 HTTP 反代服务。只要本机 `agy` 登录了账号就能直接用。
+3. **支持工具调用与多模态**：通过内置的本地 MCP 桥接，模型可以直接调用 AstrBot 里的插件工具（如 TTS 语音、查天气、代码沙箱等），也支持发图识图和调节思考深度（Reasoning）。
+4. **锁死本地高危权限**：`agy` 本身是个能读写本地文件、执行终端命令的 Agent。为了防止机器人在群里被人用提示词注入把服务器搞崩，插件在启动 `agy` 时**强制关闭了它自带的所有本地文件与终端工具**。它只负责对话，工具执行全交由 AstrBot 自身的权限体系托管。
+
+---
+
+## 3. 安装与操作教程
+
+### 第一步：安装官方 `agy` 客户端
+在运行 AstrBot 的机器上（注意必须使用**运行 AstrBot 的同一个系统用户**），参考 [Google 官方文档](https://antigravity.google/docs/getting-started) 安装 `agy`。
+
+安装完成后，在终端验证一下是否可用：
+```bash
+agy --version
+agy acp --help
+```
+> 注：插件不会自动下载二进制文件。Windows 用户请确保使用的是原生 `agy.exe`，不支持 `.cmd` 或 `.bat` 包装脚本。
+
+### 第二步：安装本插件
+在 AstrBot WebUI 插件管理页上传 [主分支 ZIP 包](https://github.com/sl251/astrbot_plugin_antigravity_acp/archive/refs/heads/main.zip)，或者直接在 AstrBot 目录下克隆仓库：
+```bash
+git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.git data/plugins/astrbot_plugin_antigravity_acp
+```
+安装后重载或重启插件。
+
+### 第三步：完成首次设置（登录与选模型）
+打开 **AstrBot WebUI → 插件 → Antigravity ACP → 首次设置**（也可以用管理员账号给机器人发 `/agy setup`）：
+
+1. **检查环境**：页面会自动检测本机 `agy` 是否就绪。
+2. **官方登录**：点击「开始官方登录」，复制生成的授权链接到浏览器完成登录（如果浏览器返回了回调地址或授权码，粘贴回页面提交即可）。**注意不要把授权码发到公开群聊里。**
+3. **保存模型**：登录成功后，页面会拉取当前账号实际可用的模型列表。选择你需要的模型和思考档位（`default` / `low` / `medium` / `high`），点击 **「保存并启用模型」**。
+
+### 第四步：切换模型
+使用页面提示的 `/agy use <provider_id>` 命令，或者直接在 AstrBot 的提供商列表里切换到刚刚保存的模型即可。
+
+---
+
+## 4. 注意事项（避坑必看）
+
+- **国内机器配置代理**：
+  如果机器直连 Google 不通，可以在插件配置中将 `proxy_mode` 设为 `custom`，并在 `proxy_url` 填入代理地址（如 `http://127.0.0.1:7890`）。该代理仅注入给 `agy` 子进程，不影响 AstrBot 里的其他国内模型。
+  *(Docker 部署注意：容器内的 `127.0.0.1` 指向容器自身，请填写宿主机内网 IP 或 `host.docker.internal`。)*
+- **开启工具调用（Tool Use）与识图（Vision）需要开两个开关**：
+  这两个功能默认关闭。如果需要开启：
+  1. 先在 **插件配置** 中开启 `enable_tools` 或 `enable_images`，保存并重载插件；
+  2. 再去 AstrBot 的 **模型 / 提供商配置** 中，为对应模型勾选 `tool_use` 或 `image` 能力。两边同时开启才会生效。
+- **关于连通测试与额度**：
+  插件「首次设置」里的检测、登录、拉取模型列表均不消耗对话额度。但 AstrBot 模型页自带的“连通测试”会实际发送一条测试消息，消耗少量额度；另外，模型保存成功仅代表协议握手通过，实际能否对话仍取决于账号自身是否有剩余额度。
+
+---
+
+## 5. 更新日志
+
+*(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
+
+- **v0.4.2 (当前版本)**：调整了启动策略，把环境预检放到后台静默执行，没装 `agy` 也不会卡住 AstrBot 启动了；清理了内部状态同步的冗余代码。
+- **v0.4.1**：修了一波细节，去掉了没用的配置项，支持直接粘贴完整的 localhost 回调链接完成登录。
+- **v0.4.0**：仓库正式改名为 `astrbot_plugin_antigravity_acp`；新增了 WebUI「首次设置」页面，登录、拉模型列表、调思考档位终于不用手搓配置文件了。
+- **v0.3.x**：把 `agy` 自带的本地文件和终端工具权限彻底锁死；补上了发图识图支持（加了防 SSRF 和尺寸限制）；重构了进程池，解决了异常退出时留僵尸进程的问题。
+- **v0.2.x**：写了个本地 MCP 桥接器，让 `agy` 能正常调用 AstrBot 里的插件工具；兼容了 TTS 这类直接发消息不返回文本的插件。
+- **v0.1.0**：看到 L 站的 DSH 插件后摸出来的初版，跑通了基础的 `agy acp` 对话流程。
+
+---
+---
+
+# 🤖 给 Agent 看的上下文
+
+> **For AI Agents / LLMs**: 下方折叠区域包含本插件的架构契约、安全边界、配置字典与排障决策树。在协助用户部署、排障或修改代码时，请展开并严格遵循以下规范。
+
+<details>
+<summary><b>📂 点击展开：Architecture, Contracts, Config Schema & Troubleshooting SOP (Agent Context)</b></summary>
+
+<br>
+
+## 1. System Identity & Core Invariants (核心契约与安全边界)
+
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.4.2`)
+- **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
+- **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
+- **Compliance & Security Invariants (DO NOT VIOLATE)**:
+  1. **No Token Extraction**: Never read, parse, export, or forward OAuth tokens from `agy` or OS keyrings (Linux Keyring / macOS Keychain / Windows Credential Manager). Auth lifecycle belongs strictly to the official `agy` binary.
+  2. **No Reverse Proxy / Spoofing**: All model traffic must flow through the official `agy acp` subprocess over `stdio`. Do not implement HTTP interception, client fingerprint spoofing, account pooling, or jailbreak prompt injection.
+  3. **Strict Capability Sandboxing**: Every `agy acp` subprocess MUST run with isolated `--gemini-dir`, `--app-data-dir`, and restricted `--agent` config under `data/plugin_data/astrbot_plugin_antigravity_acp/`. Built-in `agy` file/terminal tools are strictly disabled; any ACP request for local FS, terminal, or elevated permissions must be rejected immediately.
+
+## 2. Architecture & Data Flow (数据流与会话管理)
 
 ```mermaid
 flowchart LR
-    U[消息平台 / WebUI] --> R[AstrBot Runner]
-    R -->|流式 / 普通请求| P[Antigravity ACP]
-    P -->|ACP stdio| A["agy acp (独立会话进程)"]
-    A -->|MCP tools/call| B["mcp_bridge.py (Unix Socket)"]
-    B -->|挂起并交回宿主执行| R
+  U[Messaging Platform / WebUI] --> R[AstrBot Runner]
+  R -->|Stream / Non-stream Request| P[Provider: agy_acp]
+  P -->|ACP over stdio| A["agy acp (Isolated Session Subprocess)"]
+  A -->|MCP tools/call| B["mcp_bridge.py (Local Unix Socket)"]
+  B -->|Yield & Execute via FunctionToolExecutor| R
 ```
 
-| 环节 | 做法 |
-|---|---|
-| **进程与登录态** | 由插件按需启动本机官方 `agy acp` 子进程，凭据留在官方 CLI 与系统凭据库（Linux Keyring / macOS 钥匙串 / Windows 凭据管理器），Provider 配置无需填写 URL 或 API Key |
-| **安全隔离** | 每个会话使用位于 `data/plugin_data/astrbot_plugin_antigravity_acp/` 下的受限 `--gemini-dir`、`--app-data-dir` 与受限 `--agent` 配置；**禁用 AGY 全部内置文件/终端工具**，任何 ACP 本地文件、终端或权限请求一律拒绝 |
-| **模型与思考** | 自动从 `agy acp` 读取当前账号实际可用的 Gemini 模型列表；支持普通与流式回复、独立思考过程（Reasoning）输出，以及 `default` / `low` / `medium` / `high` 四档思考强度 |
-| **会话与历史** | 按 `Provider 实例 + AstrBot session_id + conversation_id` 绑定独立会话进程；历史前缀一致时直接复用同一 ACP 会话，发生上下文压缩、编辑、切换模型/人格或进程回收后，按 AstrBot 权威历史以带角色的 JSON 转录重建 |
-| **原生工具桥** | 启用 `enable_tools` 后，通过本地 Unix Socket MCP 桥（`mcp_bridge.py`）将工具调用交回 AstrBot 原生执行器处理，支持 `FunctionTool`、`MCPTool`、`HandoffTool` 及直接发送型插件（如语音 TTS），并自动将 `skills_like` 适配为 `full` 模式 |
-| **图片输入** | 启用 `enable_images` 后，支持 PNG / JPEG 图片输入（公网链接或受信任的本地 `media_roots` 目录），经格式、像素与防 SSRF 校验后以 ACP 原生 `image` 块发送 |
+- **Session Binding Key**: `(provider_instance_id, astrbot_session_id, conversation_id)`.
+- **History Prefix Matching**: Reuses the live `agy acp` session if the message history prefix matches. If context compression, message editing, persona switching, or process eviction occurs, the session is rebuilt using AstrBot's authoritative history formatted as a role-tagged JSON transcript.
+- **Host Tool Bridge (`mcp_bridge.py`)**: When `enable_tools=true`, host tools (`FunctionTool`, `MCPTool`, `HandoffTool`, and direct-send plugins like TTS returning `None`) are exposed to `agy acp` via a local Unix Socket MCP server. Automatically adapts AstrBot `skills_like` mode to `full` mode.
+- **Process Pool & Cleanup**: Intra-session requests are serialized; cross-session requests run in parallel up to `max_concurrency`. Idle sessions are reaped via LRU pool. Process trees are terminated via process groups on Linux/macOS and `taskkill /T` on Windows.
 
----
+## 3. File Layout (目录结构)
 
-## 功能与能力对照
-
-| 能力 | 当前支持情况 |
-|---|---|
-| **首次设置** | AstrBot 原生插件视图：无生成检测、官方 CLI 登录、选择模型与思考档位、创建或复用模型提供商 |
-| **启动预检** | 默认后台执行，失败不阻塞宿主初始化；可通过 `setup_auto_check=false` 关闭 |
-| **模型发现** | 自动拉取 `agy acp` 模型目录（缓存 5 分钟，建会话时二次校验） |
-| **思考档位** | 支持全局默认档位与单模型 `custom_extra_body` 独立覆盖（`default` / `low` / `medium` / `high`） |
-| **并发与排队** | 同会话内串行、跨会话并行；支持配置最大并发数、最大保留会话进程数（LRU 淘汰空闲会话）、最大排队数与空闲自动回收 |
-| **宿主工具调用** | 默认关闭，通过 `enable_tools` 开启；由 AstrBot 原生 `FunctionToolExecutor` 执行并回填结果，支持语音插件返回 `None` 直接结束当轮对话 |
-| **多模态输入** | 默认关闭，通过 `enable_images` 开启；支持单轮最多 8 张 PNG / JPEG 图片（图文混合或纯图输入），暂不支持音频、视频、PDF 与图片生成 |
-| **生命周期清理** | Linux / macOS 使用独立进程组回收，Windows 使用 `taskkill /T` 回收进程树；插件重载或停用时自动清理子进程与临时会话目录 |
-
----
-
-## 安装与快速上手
-
-### 1. 环境准备
-
-1. **AstrBot 版本**：已原生安装并正常运行 AstrBot `>= 4.29.4, < 4.30`（真实宿主验证过 4.29.4），Python 3.11+（本插件无额外第三方 pip 依赖）。
-2. **官方 AGY CLI**：在 **AstrBot 实际运行的环境、同一系统用户**下安装 [官方 Antigravity CLI (`agy`)](https://antigravity.google/docs/getting-started)。已有 CLI 时可直接使用下面的首次设置引导。可先在终端检查：
-   ```sh
-   agy --version
-   agy acp --help
-   ```
-   > 插件不自动下载安装 CLI。首次设置页会显示适合当前环境的官方安装命令和文档。自动搜索 `PATH`、`~/.local/bin/agy`，Windows 还搜索 `%LOCALAPPDATA%/agy/bin/agy.exe` 和用户 `.local/bin/agy.exe`；系统服务用户可能不同，找不到时填写 `command` 绝对路径。Windows 须使用原生 `agy.exe`，不支持 `.cmd` / `.bat` 包装脚本。
-3. **网络代理（可选）**：`agy` CLI 走标准 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量。需要为 AGY 单独配置代理时，在插件配置中选择 `proxy_mode=custom` 并填写 `proxy_url`（仅作用于 AGY 子进程，不影响 AstrBot 其他模型），保存后重载插件。Docker 用户注意**容器内 `127.0.0.1` 指容器自身**，需使用容器可达的宿主地址。
-
-### 2. 安装插件
-
-将本仓库克隆或解压到 AstrBot 数据目录的 `data/plugins/astrbot_plugin_antigravity_acp` 下（确保该目录下直接包含 `main.py`、`metadata.yaml` 和 `agy_provider/`，不要多套一层文件夹）：
-
-```sh
-# 在 AstrBot 根目录下执行
-git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.git data/plugins/astrbot_plugin_antigravity_acp
+```text
+data/plugins/astrbot_plugin_antigravity_acp/
+├── main.py                  # Plugin entry, lifecycle hooks, /agy command & setup view registration
+├── metadata.yaml            # AstrBot plugin metadata
+├── _conf_schema.json        # Plugin configuration schema
+├── agy_provider/            # Core ACP client, provider implementation, session pool, & MCP bridge
+├── views/setup/             # Native WebUI setup wizard views
+├── .astrbot-plugin/i18n/    # Internationalization resources
+└── tests/                   # Unit and regression test suites
 ```
+*(Constraint: Files must reside directly under `data/plugins/astrbot_plugin_antigravity_acp/`, never nested in an extra subfolder.)*
 
-也可直接下载[主分支 ZIP 包](https://github.com/sl251/astrbot_plugin_antigravity_acp/archive/refs/heads/main.zip)，在 AstrBot WebUI 插件管理页选择本地上传安装。安装后重启或重载 AstrBot 插件。
+## 4. Configuration Reference (关键配置契约)
 
-从 v0.3.2 或更早版本迁移时，先停用旧插件，再按新目录安装。新旧插件共用 `agy_acp` 模型提供商类型。要迁移插件设置，可在 AstrBot 停止时将旧的 `data/config/astrbot_plugin_agy_provider_config.json` 复制为 `data/config/astrbot_plugin_antigravity_acp_config.json`。如果之前使用自定义安装目录，旧配置文件名以实际目录名开头。已有新版配置时，请在 WebUI 中合并所需设置。
+- **`command` (Binary Resolution)**:
+  - Auto-searches `PATH`, `~/.local/bin/agy`, `%LOCALAPPDATA%/agy/bin/agy.exe`, and `~/.local/bin/agy.exe`.
+  - If AstrBot runs as a systemd service or different user, set the absolute path in `command`.
+  - **Windows Constraint**: Must point to native `agy.exe`. `.cmd` and `.bat` wrappers are NOT supported.
+- **`proxy_mode` & `proxy_url`**:
+  - Setting `proxy_mode=custom` injects `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` **only** into `agy` subprocesses.
+  - **Docker Constraint**: Inside a container, `127.0.0.1` refers to the container itself. Use `host.docker.internal` or the bridge IP.
+- **`thought_level` / `agy_thought_level`**:
+  - Valid values: `"default"`, `"low"`, `"medium"`, `"high"`.
+  - Per-model override via AstrBot model `custom_extra_body`: `{"agy_thought_level": "high"}`. Unsupported levels raise an explicit validation error.
+- **Dual-Switch Contract (Tools & Vision)**:
+  - **Tools**: Requires BOTH plugin config `enable_tools = true` (reload plugin) AND model capability `tool_use` checked in AstrBot Provider settings.
+  - **Images**: Requires BOTH plugin config `enable_images = true` (reload plugin) AND model capability `image` checked. Supports up to 8 PNG/JPEG images per turn (validated against SSRF, format, and pixel bounds; local paths must reside within trusted `media_roots`). Audio, video, PDF, and image generation are NOT supported.
+- **Legacy Migration (`<= v0.3.2`)**:
+  - Stop AstrBot -> copy `data/config/astrbot_plugin_agy_provider_config.json` to `data/config/astrbot_plugin_antigravity_acp_config.json` -> disable old plugin -> start new plugin.
 
-### 3. 首次设置（推荐）
+## 5. Diagnostic SOP for Agents (排障决策树)
 
-打开 **AstrBot WebUI → 插件 → Antigravity ACP → 首次设置**。管理员也可发送 `/agy setup` 查看入口说明。
+1. **`agy` Not Found / Spawn Error**:
+   - Verify `agy --version` and `agy acp --help` under the **exact OS user** running AstrBot.
+   - On Windows, verify `command` points to `.exe` and not `.cmd`/`.bat`.
+2. **Login / Auth Failure**:
+   - Instruct user to use WebUI `首次设置` (`agy acp --login`) or run `agy` interactively in the host terminal under the same OS user.
+   - Check `proxy_mode` / `proxy_url` if the host cannot reach Google directly.
+3. **Tools or Vision Not Triggering**:
+   - Verify the Dual-Switch Contract (Plugin Config switch + Provider Model Capability checkbox + plugin reload).
+4. **Setup Passed but Chat Fails**:
+   - Distinguish states: `Login Complete` != `ACP Handshake Passed` != `Model Saved` != `Live Generation Succeeded`. Setup checks do not send prompts; live chat failure indicates quota exhaustion, upstream rate limiting, or network timeout during streaming.
 
-1. **检查运行环境**：查看系统、Python、CLI 版本、代理模式和检查阶段。没有 CLI 时，按页面指引在实际运行环境安装，再点击「重新检测」。启用插件后默认也会在后台检测。
-2. **连接 Google 账号**：已有可用认证时直接复用；需要登录时点击「开始官方登录」。插件以 AstrBot 的运行用户启动 `agy acp --login`，登录和对话共用插件代理配置。复制页面中的官方授权链接，在外部浏览器完成授权；如官方页面返回授权码，在首次设置页回填。不要把授权材料发到聊天中。CLI 不支持此参数时，在同一环境交互运行 `agy` 完成登录，再重新检测。登录命令参见[官方 ACP 文档](https://antigravity.google/docs/cli/acp/)。
-3. **选择聊天模型**：列表来自当前账号的真实 Gemini 目录。切换模型会重新检测该模型支持的思考档位；`default` 继承插件全局 `thought_level`，全局也为 `default` 时使用 CLI 默认值。点击「保存并启用模型」会再次创建 ACP 会话，校验模型及最终档位，再调用宿主提供商接口保存。
-4. **开始聊天**：复制 `/agy use <provider_id>`，由管理员在目标聊天会话执行，或通过 AstrBot 模型选择器选用该模型。可以在保存时勾选设为全局默认，默认不勾选；全局默认变更不会覆盖已有独立模型偏好的会话。
+</details>
 
-相同 Gemini 模型与相同显式思考档位会复用已有 AGY 提供商，停用实例会重新启用；复用保存会重新持久化并重载该实例。不同档位分别保存，其他提供商不覆盖，ID 冲突时自动加后缀。模型配置保存在 AstrBot，重载后从宿主配置恢复显示。若默认切换失败，已保存模型仍保留，可重试。
+---
 
-**“官方登录完成”“ACP 检查通过”“模型已保存”和“真实对话成功”是不同状态。** 检测与保存不发送模型提示，不能替代真实生成验证。AstrBot 模型连通测试和实际聊天会调用模型并使用额度。
+## 致谢与协议
 
-首次设置页面的真实宿主截图及完整 WebUI 验收仍待补充；本版本的回归与无生成实机检测范围见 [测试记录](TEST_REPORT_0.4.1.md)。
-
-### 4. 手动添加模型提供商（高级路径）
-
-1. 进入 AstrBot WebUI **模型 / 提供商** 页面，点击新增提供商，选择 **AGY Gemini (ACP)**（类型标识为 `agy_acp`）。
-2. **无需填写 API URL 和 API Key**（保持留空即可）。
-3. 点击 **获取模型列表**，从返回的真实 Gemini 模型 ID 中选择需要的模型并添加启用。
-4. **能力勾选说明**：
-   - 默认仅需勾选 **文本**。
-   - 若需要使用**工具调用**或**识图能力**，请先在「插件配置」中打开 `enable_tools` / `enable_images` 并重载插件，然后在模型配置中同步勾选 `tool_use` / `image`。
-5. 将该模型设为当前聊天模型即可开始对话（注意：点击 WebUI 的“连通测试”会真实生成一条简短回复并消耗少量额度；仅点击“获取模型列表”不会发送对话）。
-
-### 5. 单个模型自定义思考档位（可选）
-
-如果需要为某个模型实例单独指定思考强度，可在该模型的 `custom_extra_body` 中配置：
-
-```json
-{"agy_thought_level": "high"}
+- 灵感来源：感谢 L 站大佬的 `dsh-antigravity-acp` 插件提供的思路。
+- 开源协议：详见 [`LICENSE`](./LICENSE) 与 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+- 免责声明：本插件仅作为本地官方 `agy` 客户端与 AstrBot 之间的协议适配器，与 Google 官方无关。请遵守 Google Antigravity 官方服务条款使用。
 ```
-
-可选值为 `"default"`、`"low"`、`"medium"`、`"high"`。设为 `"default"` 时继承插件全局配置；填写模型不支持的档位会明确报错。
-
----
-
-## 配置说明
-
-启动参数、并发限制与安全开关位于 **插件配置**（修改后需重载插件生效）；具体使用的模型 ID 位于 **AstrBot 模型提供商配置**。
-
-### 基础、认证与代理配置
-
-| 字段 | 默认值 | 说明 |
-|---|---:|---|
-| `setup_auto_check` | `true` | 启用插件后后台执行无生成预检；关闭后仍可使用首次设置页或 `/agy doctor` 检测 |
-| `command` | 空 | `agy` 原生可执行文件绝对路径。留空搜索 `PATH`、用户 `.local/bin`，Windows 还搜索 `%LOCALAPPDATA%/agy/bin/agy.exe`；不支持 `.cmd`/`.bat` 包装脚本 |
-| `auth_bridge` | `true` | 官方文件存在时校验并建立认证入口符号链接；文件缺失时允许 CLI 尝试原生认证后端；不安全文件或链接失败仍阻断。关闭仅禁用文件桥，见[认证与 Docker](#认证与-docker) |
-| `proxy_mode` | `inherit` | AGY 子进程代理模式：`inherit` 原样继承 AstrBot 环境；`custom` 按 `proxy_url` 覆盖；`direct` 移除 AGY 环境中的代理变量 |
-| `proxy_url` | 空 | `proxy_mode=custom` 时必填，仅支持 `http://` 与 `socks5h://`，须含主机和端口；其他模式下忽略 |
-| `thought_level` | `default` | 全局默认思考档位：`default`（使用 CLI 默认值）/ `low` / `medium` / `high` |
-| `startup_timeout` | `60` | 进程启动、ACP 握手与模型初始化超时时间（秒）；也是 doctor 自检的总执行预算 |
-| `request_timeout` | `180` | 单轮生成超时时间（秒） |
-| `queue_timeout` | `60` | 等待会话锁与并发槽位的合计排队超时时间（秒） |
-| `max_concurrent` | `2` | 每个模型实例的最大并发请求数（低配或小内存机器建议设为 `1`） |
-| `max_sessions` | `4` | 每个模型实例最多保留的常驻会话进程数（不能小于 `max_concurrent`，超限按 LRU 淘汰空闲会话） |
-| `max_pending` | `16` | 每个模型实例的最大排队等待请求数 |
-| `idle_ttl` | `600` | 空闲会话进程自动回收时间（秒） |
-| `history_bytes` | `160000` | 历史上下文重建时的 UTF-8 字节预算（范围 `4096`–`160000`，超限按完整旧轮次裁剪并标记） |
-| `max_output_bytes` | `4194304` | 单轮回复正文与思考内容的合计字节上限（达到上限时返回已有内容，不自动续写） |
-
-代理示例：`http://127.0.0.1:7890`、`socks5h://127.0.0.1:1080`，IPv6 写作 `http://[::1]:7890`。URL 不能包含空白、控制字符、反斜线、query、fragment 或业务路径；代理认证中的特殊字符需百分号编码。请勿将带凭据的 URL 粘贴到诊断消息或公开 issue。
-
-`custom` 对 AGY 子进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及小写键使用同一 URL，并仅让回环地址免代理（`localhost,127.0.0.1,::1`）。`direct` 删除这六个代理键，保留其余环境；系统 VPN、透明代理或外部包装器仍可能影响网络。代理失败不会静默直连。设置仅影响 AGY 子进程，**不改变 AstrBot、其他插件或图片下载器**；图片下载保持独立直连策略。
-
-> **注**：若在 AstrBot 中创建了多个 `agy_acp` 模型实例，各实例的并发与会话池相互独立，总进程上限会累加。
-
-### 工具桥与图片输入配置
-
-| 字段 | 默认值 | 说明 |
-|---|---:|---|
-| `enable_tools` | `false` | 是否启用宿主工具桥（需 POSIX Unix Socket 支持，故当前工具桥仅支持 Linux / macOS） |
-| `tool_max_calls` | `16` | 单轮对话允许的最大工具调用次数 |
-| `tool_max_concurrent` | `1` | 单轮同时处于待处理状态的最大工具数 |
-| `tool_approval_timeout` | `60` | 工具调用到达至交接给宿主 Runner 的等待/审批超时（秒） |
-| `tool_execution_timeout` | `120` | 宿主工具执行并回填结果的超时时间（秒） |
-| `tool_result_bytes` | `262144` | 单轮工具返回结果的总字节预算（超限不截断，直接报错拒绝） |
-| `enable_images` | `false` | 是否启用 PNG / JPEG 图片输入（需本机 `agy` CLI 报告支持 `image` 能力） |
-| `media_roots` | `[]` | 允许读取本地图片的授权目录列表（必须为绝对路径且不含符号链接） |
-| `image_max_count` | `8` | 单次请求（含历史上下文）允许的最大唯一图片张数 |
-| `image_max_bytes` | `8388608` | 单次请求图片原始总字节上限（默认 8 MiB） |
-| `image_max_pixels` | `20000000` | 单张图片最大像素数上限（默认 2000 万像素） |
-| `image_timeout` | `15` | 单张远程图片下载或本地读取超时时间（秒） |
-
----
-
-## 认证与 Docker
-
-默认认证桥检查官方文件后端路径：`~/.gemini/antigravity-cli/antigravity-oauth-token`。插件只检查文件元数据和边界，并在隔离目录建立 `agy/antigravity-oauth-token` 符号链接；**不读取、打印、上传、复制或自行刷新 token 内容**，不链接整个 `~/.gemini`。官方文件缺失时继续交由 CLI 尝试系统钥匙串，最终以实际 ACP 会话验证为准；文件存在时须非空且符合权限、归属和链接校验，不安全文件或链接创建失败会报 `AUTH_BRIDGE`。会话清理只删除链接本身，不跟随链接删除持久 token。`--app-data-dir` 保持相对路径 `agy`。
-
-`auth_bridge=false` 只关闭文件桥，不会自动解决认证失败；只有官方 CLI 在隔离目录中能使用可用原生认证后端时才适用。Windows 文件桥涉及文件元数据校验和符号链接权限；Windows/macOS 的真实认证、钥匙串与权限行为尚未完整验证，不能据离线测试推断兼容性。
-
-Docker 用户需同时注意：
-
-- CLI、登录文件及其归属必须对**容器内运行 AstrBot 的用户**可用；宿主机已安装、已登录不等于容器内可用。只授权必要路径，勿把整个宿主 HOME 当作会话目录。
-- **容器内 `127.0.0.1` 指容器自身**。宿主机代理需使用容器可达的宿主地址并配置其监听和访问权限；具体地址由部署网络决定。
-- 保存插件配置后重载。无生成自检与 Runtime 使用同一插件数据根下的独立临时目录，避免路径授权不同造成假失败。
-
----
-
-## 限制与注意事项
-
-- **合规与安全边界**：插件仅通过官方 CLI 的标准 `acp` 协议通信，不实现客户端身份伪装、不修改官方二进制、不提供多账号池或 OAuth 反向代理。使用范围请遵循 Google 官方条款。
-- **凭据刷新**：官方 token 的自然刷新与并发刷新行为尚未长期验证；短会话成功不证明长期刷新可靠。建议同一账号避免 CLI 与插件并发高频使用。
-- **采样参数不生效**：由于 ACP 协议未开放采样参数通道，AstrBot 中的 `temperature`、`top_p`、`max_tokens` 等参数不会传递给 `agy`。
-- **数据目录切勿整目录删除**：会话运行目录位于 `data/plugin_data/astrbot_plugin_antigravity_acp/`。正常退出时插件会自动清理临时会话目录；若容器或实例在同一数据树下配置了持久化认证状态，**请勿直接删空整个 `astrbot_plugin_antigravity_acp` 数据目录**，以免丢失登录态。官方 token 位于独立认证目录，勿作为临时文件删除。
-- **工具调用边界**：
-  - 仅支持 `tool_choice="auto"` 或 `"none"`，不支持强制指定函数（`required`）。
-  - 工具返回结果仅支持文本或 JSON 文本，不支持工具直接返回二进制/图片块。
-  - 原生工具桥依赖 Unix Domain Socket（`AF_UNIX`），需在 Linux / macOS 环境下使用，且临时目录路径不宜过长。
-- **图片输入边界**：
-  - 仅支持标准 8 位非交错 PNG 与 8 位 Baseline/Progressive JPEG。
-  - 本地图片路径必须位于 `media_roots` 显式授权的目录内（拒绝符号链接与目录穿越）；公网图片仅允许标准 80/443 端口且自动拦截内网/回环地址。
-  - 若 AstrBot 在进入 Provider 前已将图片过滤或清理了临时原图，插件无法恢复附件（请确保在模型设置中已勾选 `image` 能力）。
-
----
-
-## 诊断预检与排错
-
-### 1. 管理员命令与页面权限
-
-| 命令 | 作用 |
-|---|---|
-| `/agy setup` | 首次设置入口、当前检查提示和已有提供商 ID；不在聊天中显示授权链接或授权码 |
-| `/agy doctor` | 读取插件配置，检查 CLI、认证、ACP 会话与模型目录，不发送模型提示 |
-| `/agy use <provider_id>` | 只允许切换到启用的 AGY 实例，只修改命令所在聊天会话的模型偏好 |
-
-以上命令仅管理员可用。首次设置 API 使用 AstrBot Dashboard 身份验证；写操作要求当前插件实例的 nonce，页面过期后需刷新。授权 URL 和随机 ticket 仅返回给发起登录的 Dashboard 用户，不写入配置文件；同一用户的多页面共享等待中的流程，其他用户不能提交授权码或取消它。
-
-检测、登录与保存互斥。登录总预算 300 秒，等待授权 URL 最多 45 秒，可手动取消。普通刷新可以看到同一用户正在等待的登录；插件重载会取消检测和登录并清理本实例路由、子进程及临时目录，需要重新发起登录。宿主保存临界阶段会先完成再停用，防止外部取消打断保存。官方持久凭据不会作为临时状态删除。
-
-doctor 输出只包含阶段、CLI 版本、代理模式、模型目录状态等脱敏信息，不输出完整代理 URL、系统用户名、OAuth 地址、账号标识或原始 stderr。自检通过后可再通过宿主连通测试验证真实生成。
-
-### 2. 终端零消耗预检（Probe）
-
-如果遇到连接失败或报 `AUTH`（`Authentication required` / `-32000`）错误，也可在 AstrBot 对应环境中不发起对话、不消耗模型额度地运行内置预检：
-
-```sh
-python -m agy_provider.probe
-# 或显式指定 agy 路径：
-python -m agy_provider.probe --command /path/to/agy
-```
-
-退出码 `0` 表示握手与建会话成功；退出码 `2` 表示存在阻塞问题（输出仅含脱敏阶段、错误分类与白名单能力）。终端入口使用自己的命令行配置，不会自动读取面板配置；代理默认继承终端环境。
-
-### 3. 错误分类
-
-| 错误类别 | 下一步 |
-|---|---|
-| `CONFIG` | 检查命令路径、代理模式与 URL 格式，修改后重载 |
-| `NOT_INSTALLED` | 当前 AstrBot 进程的默认搜索范围未找到 CLI，不代表其他目录未安装。管理页显示搜索范围；已有 CLI 时填写 `command`，Docker 使用容器内绝对路径 |
-| `COMMAND_NOT_FOUND` | 显式 `command` 路径不存在或不是文件；核对容器挂载与运行用户。显式配置失败不会回退到其他 CLI |
-| `STARTUP_EXIT` | CLI 已启动但在 ACP 握手完成前退出，检测显示失败阶段及退出码（包括 0）；检查原生可执行文件、启动脚本、依赖和隔离目录，不要直接认定未安装或未登录 |
-| `CLI_WRAPPER` | 识别到旧启动脚本拒绝隔离目录或认证链接。将 `command` 指向官方原生可执行文件，或更新脚本的目录限制；升级后插件数据目录可能已变化 |
-| `PERMISSION` / `LAUNCH` | 检查可执行权限、服务用户、脚本解释器、动态加载器、系统架构与平台子进程支持；不要改成 shell 命令 |
-| `UNSUPPORTED` | 检查官方 CLI 的 ACP 与隔离启动能力，按官方方式处理版本 |
-| `AUTH` | 用相同系统用户运行 `agy` 登录；检查官方 token 文件、归属、父目录权限与认证桥开关 |
-| `AUTH_BRIDGE` | 现有认证文件或父目录不安全，或无法建立文件桥；检查权限。关闭桥仅适用于已确认可用的原生认证后端 |
-| `LOGIN_URL` | 45 秒内未获得官方授权 URL；在 AstrBot 实际环境运行 `agy acp --login`，不支持时交互运行 `agy` |
-| `LOGIN_EXPIRED` | 登录已结束、ticket 已失效或属于其他 Dashboard 用户；刷新状态并重新发起 |
-| `HOST` | 提供商创建、持久化、重载或默认切换失败；检查宿主配置并重试，已创建实例会复用 |
-| `PROXY_AUTH` | 代理认证失败（例如 HTTP 407）；检查代理服务认证，不要反复登录 Google |
-| `PROXY` | 检查代理地址、端口、协议、容器可达性及代理服务状态 |
-| `NETWORK` | 检查 DNS、网络出口及连接；不要将代理密码或原始日志发到聊天 |
-| `TLS` | 检查系统时间、证书链及代理的 TLS 设置 |
-| `TIMEOUT` | 按失败阶段检查网络与 CLI 响应，确认无卡住的代理，再考虑适当增加时限 |
-| `RATE_LIMIT` | 请求频率受限，降低并发并稍后再试 |
-| `QUOTA` | 检查官方 CLI 的额度或上游容量；不自动换账号或重放请求 |
-| `UPSTREAM` / `TRANSPORT` / `PROTOCOL` | 按官方 CLI 检查模型和 ACP 兼容性，报告脱敏类别、阶段与版本 |
-
-未知 JSON-RPC `-32000` 不直接等同于未登录，403 也不等同于封号。模型目录最多缓存 5 分钟；实际生成时仍会校验模型。获取目录、自检和宿主连通测试是不同操作。
-
-自定义安装目录不在默认搜索范围时，直接填写实际可执行文件的绝对路径即可。`--version` 成功仅说明版本查询可运行，不能证明包装脚本接受插件的 ACP 隔离启动参数。首次设置页显示搜索模式、失败阶段及已取得的 CLI 退出码；doctor 同样返回脱敏类别与阶段。进程尚未退出而仅关闭输出管道时仍报告 `TRANSPORT`；网络或认证的明确证据优先于通用握手前退出提示。原始 stderr、代理凭据和私人路径不会回显。
-
-`NETWORK` / `RATE_LIMIT` 也可能由 CLI 在普通模型文本流中输出的网络或高负载告警触发，支持跨分片识别，候选缓存上限 4096 字符。思考流和带后续解释的普通引用不按相同规则处理；工具交接前会检查未完成告警，失败不自动重试或重放工具。由于上游把这类错误当作文本，模型恰好只回复完全相同告警句子时仍可能误判；这不是可靠的结构化错误通道。
-
-### 4. 许可与致谢
-
-本项目以 [MIT](LICENSE) 协议开源。ACP 接入思路改编自 [lili-luo/dsh-plugin-bundle](https://github.com/lili-luo/dsh-plugin-bundle)（同样 MIT），本插件为其 Python 原生重写，未捆绑其任何运行时代码；完整来源与引用说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
