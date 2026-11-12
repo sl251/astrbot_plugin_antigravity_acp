@@ -1,4 +1,3 @@
-```markdown
 <p align="center">
   <img src="logo.png" width="160" alt="AstrBot Antigravity ACP" />
 </p>
