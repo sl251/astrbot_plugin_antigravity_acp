@@ -1,8 +1,8 @@
 {
   "views": {
     "setup": {
-      "title": "首次设置",
-      "description": "检测环境、完成官方登录、选择模型并开始聊天。"
+      "title": "Antigravity ACP",
+      "description": "Google Antigravity CLI 状态检测、账号登录与 Gemini 模型配置面板。"
     }
   }
 }

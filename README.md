@@ -2,7 +2,7 @@
 
 # AstrBot Antigravity ACP
 
-当前版本 [v0.4.1](CHANGELOG.md#041)。
+当前版本 [v0.4.2](CHANGELOG.md#042)。
 
 把本机已登录的官方 Google Antigravity CLI（`agy`）通过官方 ACP（Agent Client Protocol）协议接入 **AstrBot**，作为原生聊天模型提供商（`agy_acp`）使用。
 

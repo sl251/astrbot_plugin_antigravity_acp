@@ -41,7 +41,7 @@ async function boot(initial = base()) {
   };
   const context = vm.createContext({
     window: {AstrBotPluginView: bridge, addEventListener: (name, cb) => {handlers[name] = cb;}},
-    document: {getElementById: id => {
+    document: {documentElement: new Element("html"), getElementById: id => {
       assert.ok(elements.has(id), `Missing element ${id}`);
       return elements.get(id);
     }, createElement: tag => new Element(tag)},
@@ -50,8 +50,20 @@ async function boot(initial = base()) {
     setTimeout: () => 1, clearTimeout: () => {},
   });
   const api = await vm.runInContext(`(async () => {${source}\n; return {render, action, poll};})()`, context);
-  return {api, bridge, requests, handlers, get: id => elements.get(id)};
+  return {api, bridge, requests, handlers, doc: context.document, get: id => elements.get(id)};
 }
+
+test("theme toggle switches light and dark theme on documentElement", async () => {
+  const ui = await boot();
+  ui.get("theme-toggle").onclick();
+  assert.equal(ui.doc.documentElement.dataset.theme, "dark");
+  assert.equal(ui.get("theme-toggle").textContent, "主题：深色");
+  ui.get("theme-toggle").onclick();
+  assert.equal(ui.get("theme-toggle").textContent, "主题：自动");
+  ui.get("theme-toggle").onclick();
+  assert.equal(ui.doc.documentElement.dataset.theme, "light");
+  assert.equal(ui.get("theme-toggle").textContent, "主题：浅色");
+});
 
 test("native bridge initialization populates real model and effort options", async () => {
   const ui = await boot();

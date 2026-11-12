@@ -1,9 +1,32 @@
 const $ = (id) => document.getElementById(id);
 const bridge = window.AstrBotPluginView;
 let state, pending = false, disposed = false, timer, revision = 0, cachedModels = [], modelSignature = "", effortSignature = "", providerSignature = "";
+let themeMode = "auto";
 const activeLogin = (login) => login.busy;
 const stages = {discovery:"查找 CLI",isolation:"检查隔离目录",authentication:"检查认证",initialize:"ACP 握手","session/new":"验证登录",model_catalog:"读取模型目录",model_selection:"检查模型档位",complete:"检查通过"};
 const loginStates = {idle:"等待登录",starting:"正在启动",waiting:"等待授权",verifying:"正在验证",complete:"登录已验证",failed:"登录未完成",cancelled:"已取消"};
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (!root) return;
+  if (themeMode === "light" || themeMode === "dark") {
+    root.dataset.theme = themeMode;
+  }
+  const labels = {auto: "主题：自动", light: "主题：浅色", dark: "主题：深色"};
+  const btn = $("theme-toggle");
+  if (btn) btn.textContent = labels[themeMode];
+}
+
+function cycleTheme() {
+  const order = ["auto", "light", "dark"];
+  const root = document.documentElement;
+  if (themeMode === "auto" && root?.dataset) {
+    themeMode = root.dataset.theme === "dark" ? "light" : "dark";
+  } else {
+    themeMode = order[(order.indexOf(themeMode) + 1) % order.length];
+  }
+  applyTheme();
+}
 
 function badge(id, text, kind = "") {
   $(id).textContent = text;
@@ -33,7 +56,7 @@ function render(data) {
   if (Array.isArray(r.models)) cachedModels = r.models;
   else if (!busy) cachedModels = [];
   const models = cachedModels;
-  $("connection").textContent = busy ? "正在处理，请保持页面打开" : "已连接 AstrBot · 配置自动保存在本机";
+  $("connection").textContent = busy ? "正在同步状态…" : "已连接 AstrBot";
   $("environment").textContent = `${data.environment.system} · Python ${data.environment.python}${data.environment.container ? " · 容器环境" : ""}`;
   $("discovery-hint").textContent = data.environment.discovery_hint || "";
   $("install-hint").textContent = data.environment.install_hint;
@@ -48,7 +71,7 @@ function render(data) {
   ].filter(Boolean).map(text => {const span = document.createElement("span");span.className = "fact";span.textContent = text;return span;}));
   const errorLabels = {NOT_INSTALLED:"未找到 CLI",COMMAND_NOT_FOUND:"配置路径无效",STARTUP_EXIT:"握手前退出",CLI_WRAPPER:"启动脚本不兼容"};
   badge("check-badge", data.busy ? stages[r.stage] || "正在检测" : passed ? "环境就绪" : errorLabels[r.error_code] || r.error_code || "等待检测", passed ? "ready" : r.error_code ? "error" : "");
-  $("check-hint").textContent = data.busy ? `正在${stages[r.stage] || "检查环境"}，不会发送对话。` : data.hint;
+  $("check-hint").textContent = data.busy ? `正在${stages[r.stage] || "检查环境"}…` : data.hint;
   $("check").textContent = data.busy ? "检测中…" : "重新检测";
   $("check").disabled = busy;
   if (["NOT_INSTALLED", "COMMAND_NOT_FOUND", "STARTUP_EXIT", "CLI_WRAPPER"].includes(r.error_code)) $("install-details").open = true;
@@ -58,10 +81,10 @@ function render(data) {
   $("cancel-login").hidden = !activeLogin(login) || !login.owned;
   $("cancel-login").disabled = pending;
   $("login-hint").textContent = activeLogin(login)
-    ? `${login.owned ? "请在浏览器完成官方授权" : "另一位管理员正在登录"}，剩余约 ${login.expires_in} 秒。`
-    : passed ? "当前认证已通过 ACP 会话验证，可继续选择模型。"
-    : login.state === "failed" ? `登录未完成（${login.error_code}）。可重试，或按下方说明在终端登录。`
-    : "已有登录态会在检测时复用。首次使用请完成浏览器授权。";
+    ? `${login.owned ? "请在浏览器完成授权" : "另一位管理员正在登录"}（剩余 ${login.expires_in}s）`
+    : passed ? "Google 认证已通过验证。"
+    : login.state === "failed" ? `登录未完成（${login.error_code}），请重试或使用终端登录。`
+    : "首次使用请启动官方登录并在浏览器完成授权。";
   $("authorization").hidden = !login.url || !login.owned;
   $("auth-url").value = login.url || "";
   if (login.state !== "waiting") $("auth-code").value = "";
@@ -88,12 +111,12 @@ function render(data) {
   $("effort").disabled = busy || !passed || !selected;
   $("apply").disabled = busy || !passed || !selected;
   $("use-default").disabled = busy;
-  badge("model-badge", models.length ? "真实模型目录" : "等待登录", passed ? "ready" : "");
+  badge("model-badge", models.length ? `${models.length} 个模型` : "等待登录", passed ? "ready" : "");
   const configured = data.providers;
-  badge("finish-badge", data.result ? "已保存" : configured.length ? "已有配置" : "等待配置", configured.length ? "ready" : "");
+  badge("finish-badge", data.result ? "已保存" : configured.length ? "已配置" : "等待配置", configured.length ? "ready" : "");
   $("finish-hint").textContent = data.result
-    ? `${data.result.default_selected ? "已设为 AstrBot 默认聊天模型。" : "模型已保存并启用。"} 复制下方命令到需要使用的聊天会话，或在 AstrBot 模型选择器中选择它。尚未进行真实对话验证。`
-    : configured.length ? "以下模型配置已保留。复制命令到目标聊天会话即可切换；仍需通过环境检测确认当前可用。" : "保存后会自动创建或复用模型提供商，重载后仍保留配置。";
+    ? `${data.result.default_selected ? "已设为全局默认模型。" : "模型已保存并启用。"} 可复制下方命令在指定会话中切换：`
+    : configured.length ? "已配置的模型实例（复制命令可在会话中切换）：" : "保存模型后将在此生成会话切换命令。";
   const providerKey = JSON.stringify(configured);
   if (providerSignature !== providerKey) {
     $("configured").replaceChildren(...configured.map(row => {
@@ -101,7 +124,7 @@ function render(data) {
       const title = document.createElement("strong");title.textContent = `${row.model} · ${row.enabled ? "已启用" : "已停用"}`;
       const line = document.createElement("div");line.className = "copy-row";
       const input = document.createElement("input");input.readOnly = true;input.value = `/agy use ${row.id}`;input.setAttribute("aria-label", "切换模型命令");
-      const button = document.createElement("button");button.type = "button";button.textContent = "复制命令";button.addEventListener("click", () => copy(input));
+      const button = document.createElement("button");button.type = "button";button.className = "btn btn-sm";button.textContent = "复制命令";button.addEventListener("click", () => copy(input));
       line.append(input, button);wrapper.append(title,line);return wrapper;
     }));
     providerSignature = providerKey;
@@ -121,6 +144,7 @@ async function action(name, body = {}) {
   }
 }
 
+$("theme-toggle").onclick = cycleTheme;
 $("check").onclick = () => action("check");
 $("login").onclick = () => action("login");
 $("cancel-login").onclick = () => action("login-cancel", {ticket: state.login.ticket});
@@ -151,7 +175,7 @@ async function poll() {
       if (!pending && !disposed && currentRevision === revision) render(data);
     }
   } catch (error) {
-    $("connection").textContent = "连接中断，请确认插件已启用并刷新页面";
+    $("connection").textContent = "连接中断，请刷新页面";
     showError(error.message || "无法读取状态。");
   } finally {
     if (!disposed) timer = setTimeout(poll, state?.busy || (state && activeLogin(state.login)) ? 1200 : 5000);
@@ -159,7 +183,7 @@ async function poll() {
 }
 window.addEventListener("pagehide", () => {disposed = true;clearTimeout(timer);$("auth-code").value = "";$("auth-url").value = "";state = null;});
 if (!bridge) {
-  showError("请从 AstrBot WebUI 的插件详情打开「首次设置」页面。");
+  showError("请从 AstrBot WebUI 侧边栏或插件详情打开 Antigravity ACP 面板。");
 } else {
   try {
     await bridge.ready();
