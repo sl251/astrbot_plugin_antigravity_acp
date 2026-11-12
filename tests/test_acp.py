@@ -68,6 +68,57 @@ class AcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error_code"], "AUTH")
         self.assertNotIn("FAKE-PRIVATE", str(result))
 
+    async def test_startup_exit_reports_phase_and_exit_code_without_raw_output(self):
+        result = await self.run_probe("startup-exit")
+        self.assertEqual(
+            (result["error_code"], result["stage"], result["exit_code"]),
+            ("STARTUP_EXIT", "initialize", 23),
+        )
+        self.assertNotIn("FAKE-PRIVATE", str(result))
+        self.assertNotIn("/private/test", str(result))
+
+    async def test_zero_exit_before_handshake_is_still_startup_failure(self):
+        result = await self.run_probe("startup-zero")
+        self.assertEqual(
+            (result["error_code"], result["exit_code"]), ("STARTUP_EXIT", 0)
+        )
+
+    async def test_legacy_wrapper_refusal_is_classified_across_stderr_chunks(self):
+        result = await self.run_probe("wrapper-exit")
+        self.assertEqual(
+            (result["error_code"], result["exit_code"]), ("CLI_WRAPPER", 23)
+        )
+        self.assertNotIn("FAKE-PRIVATE", str(result))
+
+    async def test_known_network_evidence_takes_precedence_over_startup_exit(self):
+        result = await self.run_probe("network-exit")
+        self.assertEqual((result["error_code"], result["exit_code"]), ("NETWORK", 23))
+
+    async def test_success_is_not_vetoed_by_stderr_warning(self):
+        result = await self.run_probe("wrapper-warning")
+        self.assertEqual(result["status"], "passed")
+        self.assertNotIn("error_code", result)
+
+    async def test_explicit_auth_error_is_not_overridden_by_wrapper_stderr(self):
+        result = await self.run_probe("auth-with-wrapper-warning")
+        self.assertEqual(result["error_code"], "AUTH")
+
+    async def test_exit_after_handshake_is_transport_failure(self):
+        result = await self.run_probe("post-init-exit")
+        self.assertEqual(
+            (result["error_code"], result["stage"], result["exit_code"]),
+            ("TRANSPORT", "session/new", 23),
+        )
+
+    async def test_explicit_missing_command_does_not_fall_back_or_echo_path(self):
+        missing = str(self.root / "private-location" / "missing-agy")
+        with patch("agy_provider.process.shutil.which") as which:
+            with self.assertRaises(AgyError) as caught:
+                await discover(Settings(command=missing))
+        self.assertEqual(caught.exception.code, "COMMAND_NOT_FOUND")
+        self.assertNotIn(missing, str(caught.exception))
+        which.assert_not_called()
+
     async def test_empty_model_catalog(self):
         result = await self.run_probe("no-models")
         self.assertEqual(result["error_code"], "NO_MODELS")

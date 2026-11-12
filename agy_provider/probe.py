@@ -56,6 +56,8 @@ async def probe(
         report.setdefault("error_code", "TIMEOUT")
     except AgyError as exc:
         report["error_code"] = exc.code
+        if exc.exit_code is not None:
+            report["exit_code"] = exc.exit_code
     except Exception:
         # Even local exceptions may contain paths or an upstream payload.
         report["error_code"] = "LOCAL"

@@ -16,7 +16,11 @@ from .probe import probe
 
 PLUGIN_NAME = "astrbot_plugin_antigravity_acp"
 HINTS = {
-    "NOT_INSTALLED": "在运行 AstrBot 的环境中安装官方 CLI，随后重新检测；已安装时可在插件配置填写 agy 的绝对路径。",
+    "NOT_INSTALLED": "当前 AstrBot 运行环境的默认路径中未找到 CLI，不代表其他目录未安装。已有 CLI 时请在插件配置填写 command 绝对路径；Docker 使用容器内路径，保存并重载后重新检测。",
+    "COMMAND_NOT_FOUND": "配置的 command 路径不存在或不是文件。请核对 AstrBot 的运行用户及容器内路径；显式配置不会自动回退到其他 CLI。修改后保存并重载插件。",
+    "STARTUP_EXIT": "CLI 已启动，但在完成 ACP 握手前退出。请检查原生可执行文件、脚本依赖和运行用户；旧包装脚本可能不接受升级后的隔离目录。不要仅凭此错误重新安装或登录。",
+    "CLI_WRAPPER": "启动脚本拒绝了当前隔离目录或认证链接。请把 command 改为官方原生可执行文件，或更新旧脚本的目录限制；插件升级后数据目录可能已变化。保存并重载后重新检测。",
+    "TRANSPORT": "CLI 的 ACP 输出管道已关闭。请检查进程状态、启动脚本与 ACP 兼容性；仅此错误不能确定是网络或认证问题。",
     "AUTH": "点击「开始官方登录」。终端兜底：用运行 AstrBot 的同一用户执行 agy acp --login，再重新检测。",
     "AUTH_BRIDGE": "检查官方认证文件及父目录权限。Windows 文件桥需要符号链接权限；若使用系统钥匙串，可在插件配置关闭 auth_bridge 后重载并检测。",
     "CONFIG": "检查插件配置中的 CLI 路径、代理模式和代理地址；保存后重载插件。",
@@ -44,11 +48,18 @@ def next_step(report):
     return HINTS.get(report.get("error_code"), "请重新检测；仍失败时用 /agy doctor 获取脱敏诊断。")
 
 
-def environment():
+def environment(settings=None):
     container = Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
     return {
         "system": platform.system(), "python": platform.python_version(),
         "container": container, "proxy_mode_note": "登录与对话共用插件代理设置",
+        "discovery_hint": (
+            "当前使用显式 command：仅检查配置的可执行文件，不自动回退到默认搜索。"
+            if settings is not None and settings.command else
+            "当前默认搜索范围：AstrBot 进程的 PATH、%LOCALAPPDATA%/agy/bin/agy.exe、用户 .local/bin/agy.exe。"
+            if os.name == "nt" else
+            "当前默认搜索范围：AstrBot 进程的 PATH、~/.local/bin/agy。"
+        ),
         "install_url": "https://antigravity.google/docs/getting-started",
         "install_command": "irm https://antigravity.google/cli/install.ps1 | iex" if os.name == "nt" else "curl -fsSL https://antigravity.google/cli/install.sh | bash",
         "install_hint": (
@@ -104,7 +115,7 @@ class Onboarding:
         return {
             "csrf": self.csrf, "busy": self.busy, "operation": self.operation,
             "report": deepcopy(self.report), "hint": next_step(self.report),
-            "environment": environment(), "login": self.login.snapshot(owner),
+            "environment": environment(self.settings), "login": self.login.snapshot(owner),
             "providers": self.providers(), "result": self.result,
             "action_error": self.action_error,
             "action_hint": HINTS.get(self.action_error, "操作未完成，请重新检测或查看模型配置。") if self.action_error else "",

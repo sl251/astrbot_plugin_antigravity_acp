@@ -67,6 +67,28 @@ test("missing CLI enables installation guidance and prevents login/save", async 
   assert.equal(ui.get("install-details").open, true);
   assert.equal(ui.get("login").disabled, true);
   assert.equal(ui.get("apply").disabled, true);
+  assert.equal(ui.get("check-badge").textContent, "未找到 CLI");
+});
+
+test("startup diagnostics show search scope, stage and zero exit code", async () => {
+  const data = base();
+  data.report = {status: "blocked", stage: "initialize", error_code: "STARTUP_EXIT", exit_code: 0};
+  data.environment.discovery_hint = "当前默认搜索范围：PATH、~/.local/bin/agy。";
+  const ui = await boot(data);
+  assert.equal(ui.get("check-badge").textContent, "握手前退出");
+  assert.match(ui.get("discovery-hint").textContent, /PATH/);
+  assert.ok(ui.get("facts").children.some(row => row.textContent === "CLI 退出码：0"));
+  assert.ok(ui.get("facts").children.some(row => row.textContent === "失败阶段：ACP 握手"));
+  assert.equal(ui.get("install-details").open, true);
+});
+
+test("configured path and wrapper failures get distinct labels", async () => {
+  for (const [code, label] of [["COMMAND_NOT_FOUND", "配置路径无效"], ["CLI_WRAPPER", "启动脚本不兼容"]]) {
+    const data = base(); data.report = {status: "blocked", error_code: code};
+    const ui = await boot(data);
+    assert.equal(ui.get("check-badge").textContent, label);
+    assert.equal(ui.get("apply").disabled, true);
+  }
 });
 
 test("duplicate actions are blocked and nonce is sent", async () => {

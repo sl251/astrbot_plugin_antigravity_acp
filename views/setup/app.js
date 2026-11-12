@@ -35,6 +35,7 @@ function render(data) {
   const models = cachedModels;
   $("connection").textContent = busy ? "正在处理，请保持页面打开" : "已连接 AstrBot · 配置自动保存在本机";
   $("environment").textContent = `${data.environment.system} · Python ${data.environment.python}${data.environment.container ? " · 容器环境" : ""}`;
+  $("discovery-hint").textContent = data.environment.discovery_hint || "";
   $("install-hint").textContent = data.environment.install_hint;
   $("install-url").value = data.environment.install_url;
   $("install-command").value = data.environment.install_command;
@@ -42,12 +43,15 @@ function render(data) {
     r.cli_version ? `CLI ${r.cli_version}` : null,
     r.proxy_mode ? `代理：${r.proxy_mode}` : null,
     r.model_count != null ? `${r.model_count} 个可用模型` : null,
+    Number.isInteger(r.exit_code) ? `CLI 退出码：${r.exit_code}` : null,
+    r.error_code && stages[r.stage] ? `失败阶段：${stages[r.stage]}` : null,
   ].filter(Boolean).map(text => {const span = document.createElement("span");span.className = "fact";span.textContent = text;return span;}));
-  badge("check-badge", data.busy ? stages[r.stage] || "正在检测" : passed ? "环境就绪" : r.error_code || "等待检测", passed ? "ready" : r.error_code ? "error" : "");
+  const errorLabels = {NOT_INSTALLED:"未找到 CLI",COMMAND_NOT_FOUND:"配置路径无效",STARTUP_EXIT:"握手前退出",CLI_WRAPPER:"启动脚本不兼容"};
+  badge("check-badge", data.busy ? stages[r.stage] || "正在检测" : passed ? "环境就绪" : errorLabels[r.error_code] || r.error_code || "等待检测", passed ? "ready" : r.error_code ? "error" : "");
   $("check-hint").textContent = data.busy ? `正在${stages[r.stage] || "检查环境"}，不会发送对话。` : data.hint;
   $("check").textContent = data.busy ? "检测中…" : "重新检测";
   $("check").disabled = busy;
-  if (r.error_code === "NOT_INSTALLED") $("install-details").open = true;
+  if (["NOT_INSTALLED", "COMMAND_NOT_FOUND", "STARTUP_EXIT", "CLI_WRAPPER"].includes(r.error_code)) $("install-details").open = true;
   badge("login-badge", passed ? "已连接" : loginStates[login.state] || "等待登录", passed ? "ready" : login.state === "failed" ? "error" : "");
   $("login").disabled = busy || !r.cli_version;
   $("login").textContent = passed ? "重新登录" : "开始官方登录";

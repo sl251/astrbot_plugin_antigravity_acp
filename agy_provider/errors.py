@@ -4,12 +4,21 @@ import re
 
 
 class AgyError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, exit_code: int | None = None):
         self.code = code
+        self.exit_code = exit_code if type(exit_code) is int else None
         super().__init__(f"AGY [{code}] {message}")
 
 
 _MESSAGES = {
+    "STARTUP_EXIT": (
+        "CLI 已启动，但在完成 ACP 握手前退出。请检查 command 是否指向官方原生可执行文件，"
+        "以及启动脚本的依赖、运行用户和隔离目录限制；这不等同于未安装或未登录。"
+    ),
+    "CLI_WRAPPER": (
+        "CLI 启动脚本拒绝当前隔离目录或认证链接。请将 command 指向官方原生可执行文件，"
+        "或更新旧启动脚本的目录限制；插件升级后数据目录可能已变化。"
+    ),
     "PROXY_AUTH": "AGY 代理认证失败，请检查代理账号或代理服务配置。",
     "PROXY": "AGY 无法通过代理连接，请检查代理协议、地址与服务状态。",
     "NETWORK": "AGY 网络连接失败，请检查当前运行环境的网络、DNS 和代理。",
@@ -27,7 +36,7 @@ _MESSAGES = {
 }
 
 
-def classified_error(code: str, *, stage: str = "") -> AgyError:
+def classified_error(code: str, *, stage: str = "", exit_code: int | None = None) -> AgyError:
     """Rebuild an error from an allowlisted code, without upstream text."""
     if code not in _MESSAGES:
         code = "UPSTREAM"
@@ -43,7 +52,8 @@ def classified_error(code: str, *, stage: str = "") -> AgyError:
         }
         else ""
     )
-    return AgyError(code, prefix + _MESSAGES[code])
+    suffix = f" CLI 退出码：{exit_code}。" if type(exit_code) is int else ""
+    return AgyError(code, prefix + _MESSAGES[code] + suffix, exit_code=exit_code)
 
 
 def remote_error(error: object) -> AgyError:
@@ -51,6 +61,12 @@ def remote_error(error: object) -> AgyError:
     # In particular, -32000 is the generic JSON-RPC server-error range, not AUTH.
     text = str(error).lower()
     patterns = (
+        (
+            "CLI_WRAPPER",
+            r"refusing auth bridge outside agy plugin session directory|"
+            r"invalid isolated acp directories|unexpected existing auth symlink|"
+            r"unexpected existing isolated auth file; refusing overwrite",
+        ),
         (
             "PROXY_AUTH",
             r"\b407\b|\bproxy[\s:_-]+(?:requires?[\s:_-]+)?"

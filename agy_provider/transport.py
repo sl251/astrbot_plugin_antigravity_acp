@@ -75,6 +75,7 @@ class AcpClient:
         self.active = False
         self.output_bytes = 0
         self.closed = False
+        self.initialized = False
         self.close_lock = asyncio.Lock()
         self.tool_broker = None
         self.permission_errors: list[str] = []
@@ -109,12 +110,13 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.4.0"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.4.1"},
                 },
                 self.settings.startup_timeout,
             )
             if result.get("protocolVersion") != 1:
                 raise AgyError("PROTOCOL", "AGY 未协商 ACP v1。")
+            self.initialized = True
             self.capabilities = result.get("agentCapabilities") or {}
         except BaseException:
             await self.close()
@@ -173,6 +175,12 @@ class AcpClient:
             raise self._diagnose(
                 AgyError("TIMEOUT", f"ACP {self.stage} 超时。")
             ) from None
+        except AgyError as exc:
+            if exc.code == "TRANSPORT":
+                # A wrapper may exit before stdin.drain() completes. Collect
+                # the same bounded evidence as stdout EOF before closing it.
+                raise await self._transport_error(exc) from None
+            raise
         finally:
             self.pending.pop(request_id, None)
             if not future.done():
@@ -207,9 +215,10 @@ class AcpClient:
     def _diagnose(self, error: AgyError) -> AgyError:
         # Diagnostic stderr is supporting evidence only, never a success veto.
         # Prefer explicit RPC errors over stderr, including known auth failures.
-        if error.code not in {"UPSTREAM", "TRANSPORT", "TIMEOUT"}:
+        if error.code not in {"UPSTREAM", "TRANSPORT", "TIMEOUT", "STARTUP_EXIT"}:
             return error
         priority = (
+            "CLI_WRAPPER",
             "PROXY_AUTH",
             "PROXY",
             "TLS",
@@ -222,8 +231,30 @@ class AcpClient:
         codes = {code for code, stage in self.stderr_diagnostics if stage == self.stage}
         for code in priority:
             if code in codes:
-                return classified_error(code, stage=self.stage)
+                return classified_error(code, stage=self.stage, exit_code=error.exit_code)
         return error
+
+    async def _transport_error(self, error: AgyError) -> AgyError:
+        # stdout EOF alone does not prove that the process exited. Wait only
+        # briefly for exit and stderr, retaining no raw output or private paths.
+        if self.proc is None:
+            return self._diagnose(error)
+        exited = asyncio.create_task(self.proc.wait())
+        tasks = {exited}
+        if self.stderr_reader:
+            tasks.add(self.stderr_reader)
+        try:
+            await asyncio.wait(tasks, timeout=0.1)
+        finally:
+            if not exited.done():
+                exited.cancel()
+            await asyncio.gather(exited, return_exceptions=True)
+        exit_code = self.proc.returncode
+        if not self.initialized and exit_code is not None:
+            error = classified_error("STARTUP_EXIT", stage=self.stage, exit_code=exit_code)
+        else:
+            error.exit_code = exit_code
+        return self._diagnose(error)
 
     def _fail(self, error: AgyError) -> None:
         self.failed = self.failed or self._diagnose(error)
@@ -276,13 +307,10 @@ class AcpClient:
                 # a paused consumer. A truly stalled consumer still hits the
                 # bounded queue and fails closed below.
                 await asyncio.sleep(0)
-            # stdout EOF may be scheduled before the final stderr read. Give
-            # the drain a bounded chance to finish without waiting on a live CLI.
-            if self.stderr_reader and not self.stderr_reader.done():
-                await asyncio.wait({self.stderr_reader}, timeout=0.1)
-            self._fail(
+            error = await self._transport_error(
                 AgyError("TRANSPORT", "AGY 进程退出或关闭了输出管道，请检查 CLI。")
             )
+            self._fail(error)
         except asyncio.CancelledError:
             raise
         except AgyError as exc:

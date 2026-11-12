@@ -46,6 +46,23 @@ for line in sys.stdin:
         continue
     result = {}
     if method == "initialize":
+        if scenario in {"startup-exit", "startup-zero", "wrapper-exit", "network-exit"}:
+            message = {
+                "startup-exit": "Deployment script stopped FAKE-PRIVATE /private/test",
+                "startup-zero": "Deployment script stopped FAKE-PRIVATE",
+                "wrapper-exit": "Refusing auth bridge outside AGY plugin session directory FAKE-PRIVATE",
+                "network-exit": "DNS resolution failed FAKE-PRIVATE",
+            }[scenario]
+            for char in message:
+                sys.stderr.write(char)
+                sys.stderr.flush()
+            raise SystemExit(0 if scenario == "startup-zero" else 23)
+        if scenario in {"wrapper-warning", "auth-with-wrapper-warning"}:
+            print(
+                "Refusing auth bridge outside AGY plugin session directory FAKE-PRIVATE",
+                file=sys.stderr,
+                flush=True,
+            )
         if scenario == "hang":
             time.sleep(60)
         result = {
@@ -55,7 +72,9 @@ for line in sys.stdin:
             },
         }
     elif method == "session/new":
-        if scenario == "auth":
+        if scenario == "post-init-exit":
+            raise SystemExit(23)
+        if scenario in {"auth", "auth-with-wrapper-warning"}:
             send(
                 {
                     "id": request["id"],

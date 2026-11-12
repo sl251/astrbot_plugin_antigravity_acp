@@ -70,8 +70,16 @@ async def spawn(
             "PERMISSION", "无法执行 AGY，请检查可执行权限和服务用户权限。"
         ) from None
     except FileNotFoundError:
+        try:
+            exists = Path(argv[0]).is_file()
+        except OSError:
+            exists = False
+        if exists:
+            raise AgyError(
+                "LAUNCH", "CLI 文件存在但无法启动，请检查脚本解释器、动态加载器和系统架构。"
+            ) from None
         raise AgyError(
-            "NOT_INSTALLED", "无法找到 AGY 可执行文件，请检查 command 配置。"
+            "NOT_INSTALLED", "当前 AstrBot 运行环境未找到 CLI 可执行文件，请检查 command 与容器内路径。"
         ) from None
     except (OSError, NotImplementedError):
         raise AgyError(
@@ -153,7 +161,9 @@ async def capture(
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
         if proc.returncode:
-            raise remote_error(err.decode("utf-8", "replace"))
+            error = remote_error(err.decode("utf-8", "replace"))
+            error.exit_code = proc.returncode
+            raise error
         return (out or err).decode("utf-8", "replace")[:65536]
     except TimeoutError:
         raise AgyError("TIMEOUT", "AGY 版本/能力检查超时。") from None
@@ -191,8 +201,11 @@ async def discover(settings: Settings) -> LaunchInfo:
         ) from None
     if not is_file:
         raise AgyError(
-            "NOT_INSTALLED",
-            "未找到 agy。请先安装官方 CLI，或在插件配置填写 command 绝对路径。",
+            "COMMAND_NOT_FOUND" if settings.command else "NOT_INSTALLED",
+            "配置的 command 路径不存在或不是文件；请填写 AstrBot 实际运行环境中的可执行文件绝对路径。"
+            if settings.command else
+            "当前 AstrBot 运行环境的默认搜索范围未找到 CLI，不代表其他目录或宿主机未安装。"
+            "已有 CLI 时请填写 command 绝对路径；Docker 必须使用容器内路径。",
         )
     if Path(binary).suffix.lower() in {".cmd", ".bat"}:
         raise AgyError("CONFIG", "请指定原生 agy.exe，不支持通过 cmd/bat 包装器启动。")
