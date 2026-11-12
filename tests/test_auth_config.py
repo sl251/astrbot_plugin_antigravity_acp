@@ -16,7 +16,9 @@ class AuthTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # Windows CI may expose TEMP through an 8.3 alias. The fixture's mock
+        # HOME must be canonical, just like the production safety check expects.
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "official"
         self.home.mkdir(mode=0o700)
         self.isolated = self.root / "isolated"
@@ -37,6 +39,12 @@ class AuthTests(unittest.TestCase):
     def test_missing_file_defers_to_native_auth(self):
         bridge_auth(self.isolated)
         self.assertEqual(list((self.isolated / "agy").iterdir()), [])
+
+    def test_noncanonical_home_is_rejected(self):
+        with patch.object(Path, "resolve", return_value=self.root / "other-home"):
+            with self.assertRaises(AgyError) as caught:
+                bridge_auth(self.isolated)
+        self.assertEqual(caught.exception.code, "AUTH_BRIDGE")
 
     def test_empty_existing_file_rejected(self):
         self.token().write_bytes(b"")
