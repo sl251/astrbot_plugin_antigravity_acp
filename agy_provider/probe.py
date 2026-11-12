@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError
-from .models import catalog
+from .models import catalog_names, choices, find_option, options, select
 from .paths import plugin_data_root
 from .process import discover, launch_args, make_home
 from .transport import AcpClient
@@ -29,7 +29,15 @@ def capability_summary(capabilities: object) -> dict:
     return result
 
 
-async def probe(settings: Settings, root: Path | None = None) -> dict:
+async def probe(
+    settings: Settings,
+    root: Path | None = None,
+    *,
+    details: bool = False,
+    model: str = "",
+    effort: str = "default",
+    progress=None,
+) -> dict:
     report = {
         "report_version": 1,
         "status": "blocked",
@@ -43,7 +51,7 @@ async def probe(settings: Settings, root: Path | None = None) -> dict:
     }
     try:
         async with asyncio.timeout(settings.startup_timeout):
-            await _run_probe(settings, root, report)
+            await _run_probe(settings, root, report, details, model, effort, progress)
     except TimeoutError:
         report.setdefault("error_code", "TIMEOUT")
     except AgyError as exc:
@@ -54,7 +62,15 @@ async def probe(settings: Settings, root: Path | None = None) -> dict:
     return report
 
 
-async def _run_probe(settings: Settings, root: Path | None, report: dict) -> None:
+async def _run_probe(
+    settings, root, report, details=False, model="", effort="default", progress=None
+):
+    def stage(value):
+        report["stage"] = value
+        if progress:
+            progress(dict(report))
+
+    stage("discovery")
     info = await discover(settings)
     # Do not publish the raw version banner; wrappers may print private data.
     version = re.fullmatch(
@@ -63,25 +79,43 @@ async def _run_probe(settings: Settings, root: Path | None, report: dict) -> Non
         re.IGNORECASE,
     )
     report["cli_version"] = version[1] if version else "unrecognized"
-    report["stage"] = "isolation"
+    stage("isolation")
     root = root if root is not None else plugin_data_root()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix="preflight-", dir=root) as directory:
-        report["stage"] = "authentication"
+        stage("authentication")
         home = make_home(
             Path(directory), "Preflight only; no generation.", settings=settings
         )
         client = AcpClient(settings)
         try:
-            report["stage"] = "initialize"
+            stage("initialize")
             await client.start(launch_args(info, home), home / "workspace")
             report["protocol_version"] = 1
             report["advertised_capabilities"] = capability_summary(client.capabilities)
-            report["stage"] = "session/new"
+            stage("session/new")
             result = await client.new_session(home / "workspace")
-            report["stage"] = "model_catalog"
-            report["model_count"] = len(catalog(result))
+            stage("model_catalog")
+            names = catalog_names(result)
+            report["model_count"] = len(names)
             report["model_catalog"] = "available"
+            if details:
+                report["models"] = [
+                    {"id": key, "name": name} for key, name in names.items()
+                ]
+                config = options(result)
+                current = (find_option(config, "model") or {}).get("currentValue") or (
+                    result.get("models") or {}
+                ).get("currentModelId")
+                if model:
+                    stage("model_selection")
+                    config = await select(client, result, model, effort)
+                    current = model
+                report["selected_model"] = current if current in names else ""
+                report["efforts"] = [
+                    value for value in choices(find_option(config, "thought_level"))
+                    if value in {"low", "medium", "high"}
+                ]
         except asyncio.CancelledError:
             # The total budget cancels a pending RPC before its own timeout
             # handler runs. Keep its allowlisted evidence before closing it;

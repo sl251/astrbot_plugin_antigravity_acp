@@ -33,18 +33,18 @@ def choices(option: dict | None) -> dict[str, str]:
     return found
 
 
-def catalog(result: dict) -> list[str]:
+def catalog_names(result: dict) -> dict[str, str]:
     found = choices(find_option(options(result), "model"))
     model_data = result.get("models") or {}
     for model in model_data.get("availableModels", []):
         if isinstance(model, dict) and isinstance(model.get("modelId"), str):
             found[model["modelId"]] = str(model.get("name", model["modelId"]))
     # Name as well as id is checked because upstream ids can be opaque.
-    ids = [
-        key
+    ids = {
+        key: name
         for key, name in found.items()
         if "gemini" in key.lower() or "gemini" in name.lower()
-    ]
+    }
     if not ids:
         raise AgyError(
             "NO_MODELS",
@@ -53,7 +53,11 @@ def catalog(result: dict) -> list[str]:
     return ids
 
 
-async def select(client: AcpClient, result: dict, model: str, effort: str) -> None:
+def catalog(result: dict) -> list[str]:
+    return list(catalog_names(result))
+
+
+async def select(client: AcpClient, result: dict, model: str, effort: str) -> list[dict]:
     available = catalog(result)
     if model not in available:
         raise AgyError("MODEL", "所选模型不在当前 Gemini 目录中，请重新获取模型列表。")
@@ -70,15 +74,18 @@ async def select(client: AcpClient, result: dict, model: str, effort: str) -> No
             if actual and actual.get("currentValue") not in {None, model}:
                 raise AgyError("MODEL", "AGY 未切换到请求的模型。")
         elif (result.get("models") or {}).get("availableModels"):
-            await client.request(
+            changed = await client.request(
                 "session/set_model",
                 {"sessionId": client.session_id, "modelId": model},
                 client.settings.startup_timeout,
             )
+            # Legacy set_model may not report updated config options. Do not
+            # advertise or apply the previous model's thought levels in that case.
+            config = options(changed)
         else:
             raise AgyError("UNSUPPORTED", "此 CLI 没有提供模型选择能力。")
     if effort == "default":
-        return
+        return config
     level = find_option(config, "thought_level")
     allowed = choices(level)
     if not level or effort not in allowed:
@@ -91,3 +98,5 @@ async def select(client: AcpClient, result: dict, model: str, effort: str) -> No
         actual = find_option(options(changed), "thought_level")
         if actual and actual.get("currentValue") not in {None, effort}:
             raise AgyError("UNSUPPORTED", "AGY 未应用所选思考档位。")
+        config = options(changed) or config
+    return config

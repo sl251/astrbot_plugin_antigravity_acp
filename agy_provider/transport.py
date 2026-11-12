@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError, classified_error, remote_error
+from .notices import TerminalNoticeGuard
 from .process import build_child_env, spawn, stop_process
 
 
@@ -32,9 +33,10 @@ class _AgentTextGuard:
     def __init__(self):
         self.pending = ""
         self.line_start = True
+        self.notices = TerminalNoticeGuard()
 
     def feed(self, text: str, *, final=False) -> str:
-        text = self.pending + text
+        text = self.pending + self.notices.feed(text, final=final)
         self.pending = ""
         output = []
         while text:
@@ -107,7 +109,7 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.3.3"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.4.0"},
                 },
                 self.settings.startup_timeout,
             )
@@ -343,6 +345,14 @@ class AcpClient:
         if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
             raise remote_error(update.get("error", update))
         if kind in {"tool_call", "tool_call_update"}:
+            # Flush a possible terminal notice before any tool can be handed
+            # to the host. Never retry or replay a tool as part of this guard.
+            tail = self.text_guard.feed("", final=True)
+            if tail:
+                try:
+                    self.events.put_nowait(Event("text", tail))
+                except asyncio.QueueFull:
+                    raise AgyError("BACKPRESSURE", "流式消费者过慢。") from None
             if self.tool_broker is not None:
                 self.tool_broker.observe(update)
                 return

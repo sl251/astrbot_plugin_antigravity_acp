@@ -1,15 +1,21 @@
 {
+  "setup_auto_check": {
+    "description": "启动时自动检查环境",
+    "type": "bool",
+    "default": true,
+    "hint": "首次使用：打开插件详情 → 首次设置，依次检测、登录、选择模型并保存。也可发送 /agy setup。检测不发送对话，后台执行；关闭后可在引导页手动检测。"
+  },
   "command": {
     "description": "AGY 可执行文件路径",
     "type": "string",
     "default": "",
-    "hint": "留空从 PATH 和 ~/.local/bin 查找；否则填写绝对路径。Windows 使用 agy.exe。不要填写参数。"
+    "hint": "留空搜索 PATH、~/.local/bin；Windows 还搜索 %LOCALAPPDATA%/agy/bin/agy.exe。否则填写原生可执行文件的绝对路径，不要填写参数；保存后重载。"
   },
   "auth_bridge": {
     "description": "桥接官方 CLI 登录态",
     "type": "bool",
     "default": true,
-    "hint": "只链接当前系统用户的官方 token 文件，不读取或复制内容；关闭后使用纯隔离会话。先在 AstrBot 实际运行环境执行 agy 登录。并发刷新行为未经验证。"
+    "hint": "官方文件存在时校验并链接，不读取或复制内容；文件缺失时由 CLI 尝试系统钥匙串，最终以 ACP 检测为准。Windows 文件桥需要符号链接权限。关闭仅禁用文件桥；保存后重载。"
   },
   "proxy_mode": {
     "description": "AGY 网络代理模式",

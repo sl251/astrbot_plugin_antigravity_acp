@@ -7,6 +7,22 @@ The Python implementation was authored for this repository. ACP transport, isola
 
 No DSH runtime or compiled JavaScript is bundled.
 
+The 0.4.0 onboarding implementation additionally consulted
+`lili-luo/dsh-plugin-bundle` commit
+`0a90ec37c69430608084e33ebc2f891e328c9e89`, especially
+`dsh-llm-antigravity-acp/src/{preflight,runtime,remote,conversation}.ts` and
+`model-selection.js`. Windows discovery, official CLI login orchestration,
+and bounded streaming-notice recognition were adapted in Python. The view
+uses AstrBot's own plugin-view bridge; DSH UI and runtime dependencies are
+not bundled. The upstream license retained below covers these adaptations.
+OAuth credential readers/refreshers, internal Cloud Code requests, account
+pools, client-identity substitution, and binary patches were not imported.
+
+Host integration follows AstrBot v4.29.4's
+`docs/zh/dev/star/guides/plugin-pages.md`, `astrbot/api/web.py`, and
+`astrbot/core/provider/manager.py`. CLI install/login guidance was checked
+against the official getting-started and ACP documentation on 2026-11-12.
+
 M0 protocol/design review additionally consulted ACP v1 schema at
 [`7ec5185c18ca928b48e457d2d8a163800be013c8`](https://github.com/agentclientprotocol/agent-client-protocol/tree/7ec5185c18ca928b48e457d2d8a163800be013c8),
 the official AGY documentation repository at

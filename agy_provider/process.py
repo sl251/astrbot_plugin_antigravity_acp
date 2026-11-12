@@ -51,6 +51,7 @@ async def spawn(
             stderr=asyncio.subprocess.PIPE,
             limit=1048576,
             start_new_session=os.name == "posix",
+            **({"creationflags": 0x08000000} if os.name == "nt" else {}),
         )
     )
     try:
@@ -116,6 +117,7 @@ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
                 "/F",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=0x08000000,
             )
             try:
                 await asyncio.wait_for(killer.wait(), 5)
@@ -171,10 +173,14 @@ async def discover(settings: Settings) -> LaunchInfo:
         if settings.command:
             binary = str(Path(settings.command).expanduser())
         else:
-            binary = shutil.which("agy") or ""
+            binary = shutil.which("agy.exe" if os.name == "nt" else "agy") or ""
             if not binary:
-                for name in ("agy", "agy.exe"):
-                    candidate = Path.home() / ".local" / "bin" / name
+                candidates = []
+                if os.name == "nt":
+                    local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+                    candidates.append(local / "agy" / "bin" / "agy.exe")
+                candidates.append(Path.home() / ".local" / "bin" / ("agy.exe" if os.name == "nt" else "agy"))
+                for candidate in candidates:
                     if candidate.is_file():
                         binary = str(candidate)
                         break

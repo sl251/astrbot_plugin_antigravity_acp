@@ -12,7 +12,7 @@ from astrbot.core.provider import register as registry
 from .agy_provider.config import Settings
 from .agy_provider.errors import AgyError
 from .agy_provider.host_compat import install_host_compat, uninstall_host_compat
-from .agy_provider.probe import probe
+from .agy_provider.onboarding import Onboarding, next_step
 from .agy_provider.provider import (
     DEFAULT_CONFIG,
     OWNER,
@@ -41,7 +41,7 @@ def unregister_owned_adapter() -> None:
     "astrbot_plugin_antigravity_acp",
     "sl251",
     "通过本机 AGY ACP 使用 Gemini 模型",
-    "0.3.3",
+    "0.4.0",
     "https://github.com/sl251/astrbot_plugin_antigravity_acp",
 )
 class AgyProviderPlugin(Star):
@@ -52,10 +52,55 @@ class AgyProviderPlugin(Star):
         self.doctor_lock = asyncio.Lock()
         self.doctor_task = None
         self.stopping = False
+        self.setup_service = None
 
     @filter.command_group("agy")
     async def agy(self, event: AstrMessageEvent):
         pass
+
+    @agy.command("setup")
+    @filter.permission_type(filter.PermissionType.ADMIN, raise_error=False)
+    async def setup(self, event: AstrMessageEvent):
+        if not event.is_admin():
+            return
+        if self.stopping or self.setup_service is None:
+            yield event.plain_result("AGY 插件尚未就绪，请启用后重试。")
+            return
+        service = self.setup_service
+        busy = service.busy or service.login.busy
+        message = "AGY 首次设置\n打开 AstrBot WebUI → 插件 → Antigravity ACP → 首次设置。\n"
+        message += "检测或登录正在进行。" if busy else next_step(service.report)
+        if rows := service.providers():
+            message += "\n已配置模型：\n" + "\n".join(
+                f"{row['id']} · {row['model']}" for row in rows
+            )
+            message += "\n在本会话使用：/agy use <提供商 ID>"
+        yield event.plain_result(message)
+
+    @agy.command("use")
+    @filter.permission_type(filter.PermissionType.ADMIN, raise_error=False)
+    async def use(self, event: AstrMessageEvent, provider_id: str = ""):
+        if not event.is_admin():
+            return
+        service = self.setup_service
+        if self.stopping or service is None:
+            yield event.plain_result("AGY 插件尚未就绪。")
+            return
+        try:
+            service._available()
+            allowed = {row["id"] for row in service.providers() if row["enabled"]}
+            if provider_id not in allowed:
+                raise AgyError("CONFIG", "请先在首次设置页保存模型，再使用 /agy use <提供商 ID>。")
+            from astrbot.core.provider.entities import ProviderType
+
+            await self.context.provider_manager.set_provider(
+                provider_id, ProviderType.CHAT_COMPLETION, event.unified_msg_origin
+            )
+            yield event.plain_result(f"当前会话已切换到 {provider_id}，可以开始聊天。")
+        except AgyError as exc:
+            yield event.plain_result(str(exc))
+        except Exception:
+            yield event.plain_result("AGY 模型切换失败，请检查模型是否已启用，或重新运行首次设置。")
 
     @agy.command("doctor")
     @filter.permission_type(filter.PermissionType.ADMIN, raise_error=False)
@@ -71,18 +116,25 @@ class AgyProviderPlugin(Star):
             return
         async with self.doctor_lock:
             try:
-                settings = Settings.from_dict(self.config)
-            except AgyError:
-                yield event.plain_result("AGY [CONFIG] 请检查插件面板配置。")
+                if self.setup_service is None:
+                    raise AgyError("CLOSED", "首次设置服务尚未就绪。")
+                self.setup_service.start_check()
+            except AgyError as exc:
+                yield event.plain_result(str(exc))
                 return
-            self.doctor_task = asyncio.create_task(probe(settings), name="agy:doctor")
+            self.doctor_task = self.setup_service.job
             try:
-                report = await self.doctor_task
+                await asyncio.shield(self.doctor_task)
+                report = {
+                    key: value for key, value in self.setup_service.report.items()
+                    if key not in {"models", "efforts", "selected_model"}
+                }
             finally:
                 self.doctor_task = None
         yield event.plain_result(
             "AGY 无生成自检（不会发送模型提示）：\n"
             + json.dumps(report, ensure_ascii=False, indent=2)
+            + "\n" + next_step(report)
         )
 
     async def initialize(self):
@@ -121,12 +173,18 @@ class AgyProviderPlugin(Star):
                         logger.error("AGY provider 重载失败，请在模型设置重新启用。")
         setattr(manager, RESTORE_IDS, set())
         logger.info(
-            "已注册 agy_acp，请到模型提供商页面新增并选择模型；Key/URL 无需填写。"
+            "已注册 agy_acp。打开插件详情 → 首次设置，或发送 /agy setup 开始引导。"
         )
         self.stopping = False
+        self.setup_service = Onboarding(self.context, settings)
+        self.setup_service.register()
+        if settings.setup_auto_check:
+            self.setup_service.start_check()
 
     async def terminate(self):
         self.stopping = True
+        if self.setup_service:
+            await self.setup_service.close()
         if self.doctor_task:
             self.doctor_task.cancel()
             await asyncio.gather(self.doctor_task, return_exceptions=True)

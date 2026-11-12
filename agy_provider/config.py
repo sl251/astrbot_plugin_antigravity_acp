@@ -12,6 +12,7 @@ from .errors import AgyError
 
 @dataclass(frozen=True)
 class Settings:
+    setup_auto_check: bool = True
     command: str = ""
     auth_bridge: bool = True
     proxy_mode: str = "inherit"
@@ -63,7 +64,7 @@ class Settings:
         }
         parsed = {}
         defaults = cls()
-        for key in ("enable_tools", "enable_images", "auth_bridge"):
+        for key in ("enable_tools", "enable_images", "auth_bridge", "setup_auto_check"):
             value = values.get(key, getattr(defaults, key))
             if type(value) is not bool:
                 raise AgyError("CONFIG", f"{key} 必须是布尔值。")

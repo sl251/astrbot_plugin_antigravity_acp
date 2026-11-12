@@ -29,7 +29,7 @@ async def main(path):
                 result = {
                     "protocolVersion": "2025-11-25",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "astrbot", "version": "0.3.3"},
+                    "serverInfo": {"name": "astrbot", "version": "0.4.0"},
                 }
             elif method == "ping":
                 result = {}

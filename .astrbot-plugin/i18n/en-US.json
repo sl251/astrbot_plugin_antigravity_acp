@@ -1,0 +1,8 @@
+{
+  "views": {
+    "setup": {
+      "title": "Setup",
+      "description": "Check the environment, sign in with the official CLI, and choose a model."
+    }
+  }
+}
