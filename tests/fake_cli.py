@@ -5,6 +5,13 @@ import os
 import sys
 import time
 
+# Windows 上 Python 默认 cp1252 会污染插件写入的 UTF-8 JSON-RPC：试验夹具强制 UTF-8。
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 scenario = sys.argv[1]
 model = "gemini-test"
 effort = "low"
