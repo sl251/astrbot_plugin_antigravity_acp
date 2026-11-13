@@ -228,3 +228,255 @@ class NoticeTests(unittest.TestCase):
         out = "".join(guard.feed(ch) for ch in normal) + guard.feed("", final=True)
         self.assertEqual(out, "正常回复")
         self.assertEqual(guard.retries.error_code, "NETWORK")
+
+    def test_captured_verbatim_notices_zero_leak_and_classify_network(self):
+        # Verbatim fixtures from capture/capture-notes.md.
+        post_eof = (
+            '\n⚠ API error (attempt 1): request failed: Post '
+            '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF\n'
+        )
+        stream_interrupted = (
+            "\n⚠ The stream was interrupted. Please continue the task you were working on.\n"
+        )
+        wild_wrapped = (
+            '⚠ API error (attempt 1): request failed: Post\n'
+            '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n'
+        )
+        for name, raw in (
+            ("post_eof", post_eof),
+            ("stream_interrupted", stream_interrupted),
+            ("wild_wrapped", wild_wrapped),
+        ):
+            for use_agent_guard in (False, True):
+                with self.subTest(name=name, agent_guard=use_agent_guard):
+                    guard = _AgentTextGuard() if use_agent_guard else RetryNoticeGuard()
+                    out = guard.feed(raw) + guard.feed("", final=True)
+                    self.assertEqual(out, "")
+                    retries = guard.retries if use_agent_guard else guard
+                    self.assertEqual(retries.error_code, "NETWORK")
+
+        # Continuation line arriving in separate chunks (both at line break and mid-URL).
+        header, cont = wild_wrapped.split("\n", 1)
+        for chunk1, chunk2 in (
+            (header + "\n", cont),
+            (header + "\n" + cont[:10], cont[10:]),
+        ):
+            with self.subTest(chunk1=chunk1):
+                guard = RetryNoticeGuard()
+                out = guard.feed(chunk1) + guard.feed(chunk2) + guard.feed("", final=True)
+                self.assertEqual(out, "")
+                self.assertEqual(guard.error_code, "NETWORK")
+
+        # Verbatim capture.jsonl replay: POST EOF chunk followed 10s later by "1\n2\n3\n4\n".
+        guard = _AgentTextGuard()
+        out = (
+            guard.feed(post_eof)
+            + guard.feed("1\n2\n3\n4\n")
+            + guard.feed("5\n6\n")
+            + guard.feed("", final=True)
+        )
+        self.assertEqual(out, "1\n2\n3\n4\n5\n6\n")
+        self.assertEqual(guard.retries.error_code, "NETWORK")
+
+    def test_wrapped_multiline_retry_all_splits_and_char_by_char(self):
+        for prefix in ("⚠", "⚠️"):
+            for scheme in ("https://", "http://"):
+                raw = (
+                    f"{prefix} API error (attempt 1): request failed: Post\n"
+                    f'"{scheme}daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n'
+                )
+                with self.subTest(prefix=prefix, scheme=scheme):
+                    guard = RetryNoticeGuard()
+                    self.assertEqual(guard.feed(raw) + guard.feed("", final=True), "")
+                    self.assertEqual(guard.error_code, "NETWORK")
+
+                    guard = RetryNoticeGuard()
+                    out = "".join(guard.feed(ch) for ch in raw) + guard.feed("", final=True)
+                    self.assertEqual(out, "")
+                    self.assertEqual(guard.error_code, "NETWORK")
+
+                    answer = "完整正文第一行\n完整正文第二行"
+                    payload = raw + answer
+                    for split in range(len(payload) + 1):
+                        guard = RetryNoticeGuard()
+                        out = (
+                            guard.feed(payload[:split])
+                            + guard.feed(payload[split:])
+                            + guard.feed("", final=True)
+                        )
+                        self.assertEqual(out, answer)
+                        self.assertEqual(guard.error_code, "NETWORK")
+
+        # Missing trailing newline on continuation still drops and classifies at final=True.
+        no_trailing_nl = (
+            '⚠ API error (attempt 1): request failed: Post\n'
+            '"https://example.com/v1": unexpected EOF'
+        )
+        guard = RetryNoticeGuard()
+        out = "".join(guard.feed(ch) for ch in no_trailing_nl) + guard.feed("", final=True)
+        self.assertEqual(out, "")
+        self.assertEqual(guard.error_code, "NETWORK")
+
+    def test_stream_interrupted_notice_splits_vs16_and_preserved_quotes(self):
+        for prefix in ("⚠", "⚠️"):
+            raw = f"{prefix} The stream was interrupted. Please continue the task you were working on.\n"
+            answer = "继续输出的正文"
+            payload = raw + answer
+            for split in range(len(payload) + 1):
+                with self.subTest(prefix=prefix, split=split):
+                    guard = RetryNoticeGuard()
+                    out = (
+                        guard.feed(payload[:split])
+                        + guard.feed(payload[split:])
+                        + guard.feed("", final=True)
+                    )
+                    self.assertEqual(out, answer)
+                    self.assertEqual(guard.error_code, "NETWORK")
+
+            guard = RetryNoticeGuard()
+            out = "".join(guard.feed(ch) for ch in payload) + guard.feed("", final=True)
+            self.assertEqual(out, answer)
+            self.assertEqual(guard.error_code, "NETWORK")
+
+        # Mid-stream interruption after partial line without trailing newline keeps boundary clean.
+        guard = RetryNoticeGuard()
+        out = (
+            guard.feed("1\n2\n3")
+            + guard.feed("\n⚠ The stream was interrupted. Please continue the task you were working on.\n")
+            + guard.feed("4\n5")
+            + guard.feed("", final=True)
+        )
+        self.assertEqual(out, "1\n2\n3\n4\n5")
+        self.assertEqual(guard.error_code, "NETWORK")
+
+        # Mid-line quotes or incomplete heads are preserved verbatim.
+        for text in (
+            "用户引用：⚠ The stream was interrupted. Please continue the task you were working on.\n",
+            "⚠ The stream was interrupted.\n",
+            "The stream was interrupted. Please continue the task you were working on.\n",
+        ):
+            with self.subTest(text=text):
+                guard = RetryNoticeGuard()
+                out = "".join(guard.feed(ch) for ch in text) + guard.feed("", final=True)
+                self.assertEqual(out, text)
+                self.assertEqual(guard.error_code, "")
+
+        for partial in ("⚠ The stream", "⚠️ The stream was interrupted. Please continu"):
+            with self.subTest(partial=partial):
+                guard = RetryNoticeGuard()
+                self.assertEqual(guard.feed(partial), "")
+                self.assertEqual(guard.feed("", final=True), partial)
+                self.assertEqual(guard.error_code, "")
+
+    def test_continuation_termination_bounds_and_quoted_multiline_preservation(self):
+        # Independent body chunk without blank line right after wrapped notice is preserved.
+        guard = RetryNoticeGuard()
+        out = (
+            guard.feed(
+                '⚠ API error (attempt 1): request failed: Post\n'
+                '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n'
+            )
+            + guard.feed("独立正文第一行\n独立正文第二行")
+            + guard.feed("", final=True)
+        )
+        self.assertEqual(out, "独立正文第一行\n独立正文第二行")
+        self.assertEqual(guard.error_code, "NETWORK")
+
+        # Defensive case: body starting with '"https://' is bounded by max 2 continuation lines.
+        defensive = (
+            "⚠ API error (attempt 1): 503 capacity\n"
+            '"https://first.example.com"\n'
+            '"https://second.example.com"\n'
+            '"https://third.example.com"\n'
+            "后续正常内容"
+        )
+        for char_mode in (False, True):
+            with self.subTest(char_mode=char_mode):
+                guard = RetryNoticeGuard()
+                if char_mode:
+                    out = "".join(guard.feed(ch) for ch in defensive) + guard.feed("", final=True)
+                else:
+                    out = guard.feed(defensive) + guard.feed("", final=True)
+                self.assertEqual(out, '"https://third.example.com"\n后续正常内容')
+
+        # Blank line terminates continuation before a following '"https://' body line.
+        blank_stop = '⚠ API error (attempt 1): Post\n\n"https://body.example.com"\n'
+        guard = RetryNoticeGuard()
+        self.assertEqual(
+            "".join(guard.feed(ch) for ch in blank_stop) + guard.feed("", final=True),
+            '\n"https://body.example.com"\n',
+        )
+
+        # Non-URL line (including partial '"htt' prefix) terminates continuation and emits cleanly.
+        non_url = '⚠ API error (attempt 1): Post\n"hello"\n"https://body.example.com"\n'
+        guard = RetryNoticeGuard()
+        self.assertEqual(
+            "".join(guard.feed(ch) for ch in non_url) + guard.feed("", final=True),
+            '"hello"\n"https://body.example.com"\n',
+        )
+        guard = RetryNoticeGuard()
+        self.assertEqual(
+            guard.feed('⚠ API error (attempt 1): Post\n"htt') + guard.feed("", final=True),
+            '"htt',
+        )
+
+        # New ⚠ header resets continuation line budget and reclassifies.
+        two_alerts = (
+            '⚠ API error (attempt 1): Post\n'
+            '"https://one.example.com"\n'
+            '"https://two.example.com"\n'
+            '⚠ API error (attempt 2): request failed: Post\n'
+            '"https://three.example.com": EOF\n'
+            "正常回复"
+        )
+        guard = RetryNoticeGuard()
+        out = "".join(guard.feed(ch) for ch in two_alerts) + guard.feed("", final=True)
+        self.assertEqual(out, "正常回复")
+        self.assertEqual(guard.error_code, "NETWORK")
+
+        # Terminal marker immediately after wrapped notice terminates continuation and raises.
+        terminal = next(iter(TerminalNoticeGuard.messages))
+        wrapped_then_terminal = (
+            '⚠ API error (attempt 1): request failed: Post\n'
+            '"https://example.com": EOF\n'
+            f"⚠ {terminal}."
+        )
+        guard = _AgentTextGuard()
+        with self.assertRaises(AgyError) as caught:
+            for ch in wrapped_then_terminal:
+                guard.feed(ch)
+            guard.feed("", final=True)
+        self.assertEqual(caught.exception.code, "NETWORK")
+
+        # 4096B cap during continuation keeps diagnostic bounded and releases later URL lines.
+        big_cont_head = (
+            "⚠ API error (attempt 1): Post\n"
+            + '"https://example.com/'
+            + ("x" * 4200)
+            + " unexpected eof"
+        )
+        guard = RetryNoticeGuard()
+        out = "".join(
+            guard.feed(big_cont_head[i : i + 128])
+            for i in range(0, len(big_cont_head), 128)
+        )
+        self.assertEqual(out, "")
+        self.assertLessEqual(len(guard.diagnostic), 4096)
+        self.assertLessEqual(len(guard._notice_diagnostic), 4096)
+        self.assertEqual(guard.error_code, "UPSTREAM")
+        out_tail = guard.feed('\n"https://body.example.com"\n') + guard.feed("", final=True)
+        self.assertEqual(out_tail, '"https://body.example.com"\n')
+        self.assertEqual(guard.diagnostic, "")
+        self.assertEqual(guard.error_code, "UPSTREAM")
+
+        # User quoting the two-line alert in normal body text is preserved verbatim.
+        quoted = (
+            '报错日志如下：\n'
+            '请看 ⚠ API error (attempt 1): request failed: Post\n'
+            '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n'
+            '以上原文保留。'
+        )
+        guard = RetryNoticeGuard()
+        out = "".join(guard.feed(ch) for ch in quoted) + guard.feed("", final=True)
+        self.assertEqual(out, quoted)
+        self.assertEqual(guard.error_code, "")

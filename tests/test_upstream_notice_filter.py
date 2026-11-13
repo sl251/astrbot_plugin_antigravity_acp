@@ -232,6 +232,9 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
         for scenario, expected_code in (
             ("retry-quota-only", "QUOTA"),
             ("retry-eof-only", "NETWORK"),
+            ("retry-multiline-eof-only", "NETWORK"),
+            ("retry-post-eof-only", "NETWORK"),
+            ("retry-stream-interrupted-only", "NETWORK"),
         ):
             client = AcpClient(settings)
             self.addAsyncCleanup(client.close)
@@ -263,26 +266,28 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(caught.exception.code, expected_code)
             await runtime.close()
 
-        # Retry line followed by normal text keeps only the real answer.
-        runtime = Runtime(settings, self.root)
-        self.addAsyncCleanup(runtime.close)
-        request = normalize([], "你好", None, None, 1024)
-        with (
-            patch(
-                "agy_provider.sessions.discover",
-                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
-            ),
-            patch(
-                "agy_provider.sessions.launch_args",
-                return_value=[sys.executable, str(fixture), "retry-then-answer"],
-            ),
-            patch("agy_provider.sessions.select", AsyncMock()),
-        ):
-            events = [
-                event
-                async for event in runtime.stream(
-                    request, "conv-ok", "gemini-test", "low"
-                )
-            ]
-        done = next(e for e in events if e.kind == "done")
-        self.assertEqual(done.text, "真实回复内容")
+        # Single-line or wrapped multi-line retry notice followed by normal text keeps only the real answer.
+        for scenario in ("retry-then-answer", "retry-multiline-then-answer"):
+            runtime = Runtime(settings, self.root)
+            self.addAsyncCleanup(runtime.close)
+            request = normalize([], "你好", None, None, 1024)
+            with (
+                patch(
+                    "agy_provider.sessions.discover",
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                ),
+                patch(
+                    "agy_provider.sessions.launch_args",
+                    return_value=[sys.executable, str(fixture), scenario],
+                ),
+                patch("agy_provider.sessions.select", AsyncMock()),
+            ):
+                events = [
+                    event
+                    async for event in runtime.stream(
+                        request, "conv-ok", "gemini-test", "low"
+                    )
+                ]
+            done = next(e for e in events if e.kind == "done")
+            self.assertEqual(done.text, "真实回复内容")
+            await runtime.close()
