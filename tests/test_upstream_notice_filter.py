@@ -10,8 +10,9 @@ from agy_provider import sessions as sessions_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.messages import digest, normalize
+from agy_provider.process import LaunchInfo
 from agy_provider.sessions import Runtime, strip_upstream_capacity_notices
-from agy_provider.transport import Event
+from agy_provider.transport import AcpClient, Event
 
 
 def _make_notices(count: int, model: str = "gemini-3.8-flash-low") -> str:
@@ -222,3 +223,71 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
                     await provider.text_chat(prompt="你好", session_id="qq-group-2")
             self.assertEqual(caught.exception.code, "QUOTA")
         sys.modules.pop("agy_provider.provider", None)
+
+    async def test_acp_client_and_runtime_stream_handle_retry_only_and_retry_then_answer(self):
+        fixture = Path(__file__).with_name("fake_cli.py")
+        settings = Settings(auth_bridge=False, startup_timeout=5, request_timeout=5)
+
+        # Transport level: retry-only turns yield no text and carry agy_retry_error.
+        for scenario, expected_code in (
+            ("retry-quota-only", "QUOTA"),
+            ("retry-eof-only", "NETWORK"),
+            ("retry-multiline-eof-only", "NETWORK"),
+            ("retry-post-eof-only", "NETWORK"),
+            ("retry-stream-interrupted-only", "NETWORK"),
+        ):
+            client = AcpClient(settings)
+            self.addAsyncCleanup(client.close)
+            await client.start([sys.executable, str(fixture), scenario], self.root)
+            await client.new_session(self.root)
+            events = [event async for event in client.generate("hello")]
+            self.assertEqual([e.kind for e in events], ["done"])
+            self.assertEqual(events[0].result["agy_retry_error"], expected_code)
+            await client.close()
+
+            # Session level: empty body with agy_retry_error raises classified_error.
+            runtime = Runtime(settings, self.root)
+            self.addAsyncCleanup(runtime.close)
+            request = normalize([], "你好", None, None, 1024)
+            with (
+                patch(
+                    "agy_provider.sessions.discover",
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                ),
+                patch(
+                    "agy_provider.sessions.launch_args",
+                    return_value=[sys.executable, str(fixture), scenario],
+                ),
+                patch("agy_provider.sessions.select", AsyncMock()),
+            ):
+                with self.assertRaises(AgyError) as caught:
+                    async for _ in runtime.stream(request, "conv-retry", "gemini-test", "low"):
+                        pass
+                self.assertEqual(caught.exception.code, expected_code)
+            await runtime.close()
+
+        # Single-line or wrapped multi-line retry notice followed by normal text keeps only the real answer.
+        for scenario in ("retry-then-answer", "retry-multiline-then-answer"):
+            runtime = Runtime(settings, self.root)
+            self.addAsyncCleanup(runtime.close)
+            request = normalize([], "你好", None, None, 1024)
+            with (
+                patch(
+                    "agy_provider.sessions.discover",
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                ),
+                patch(
+                    "agy_provider.sessions.launch_args",
+                    return_value=[sys.executable, str(fixture), scenario],
+                ),
+                patch("agy_provider.sessions.select", AsyncMock()),
+            ):
+                events = [
+                    event
+                    async for event in runtime.stream(
+                        request, "conv-ok", "gemini-test", "low"
+                    )
+                ]
+            done = next(e for e in events if e.kind == "done")
+            self.assertEqual(done.text, "真实回复内容")
+            await runtime.close()

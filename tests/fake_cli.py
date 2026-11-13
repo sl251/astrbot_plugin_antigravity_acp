@@ -171,6 +171,60 @@ for line in sys.stdin:
                 }
             )
             continue
+        if scenario in {
+            "retry-quota-only",
+            "retry-eof-only",
+            "retry-then-answer",
+            "retry-multiline-eof-only",
+            "retry-post-eof-only",
+            "retry-stream-interrupted-only",
+            "retry-multiline-then-answer",
+        }:
+            chunks = {
+                "retry-quota-only": (
+                    "⚠ API error (attempt 1): UNAVAILABLE ",
+                    "(code 503): No capacity available for model gemini-2.5-pro on the server\n",
+                    "⚠️ API error (attempt 2): UNAVAILABLE (code 503): No capacity available for model gemini-2.5-pro on the server",
+                ),
+                "retry-eof-only": (
+                    "⚠ API error (attempt 1):",
+                    " stream error: unexpected EOF\n",
+                ),
+                "retry-then-answer": (
+                    "⚠️ API error (attempt 1): unexpected EOF\n",
+                    "真实回复内容",
+                ),
+                "retry-multiline-eof-only": (
+                    "⚠ API error (attempt 1): request failed: Post\n",
+                    '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n',
+                ),
+                "retry-post-eof-only": (
+                    '\n⚠ API error (attempt 1): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF\n',
+                ),
+                "retry-stream-interrupted-only": (
+                    "\n⚠ The stream was interrupted. Please continue the task you were working on.\n",
+                ),
+                "retry-multiline-then-answer": (
+                    "⚠ API error (attempt 1): request failed: Post\n",
+                    '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n',
+                    "真实回复内容",
+                ),
+            }[scenario]
+            for text in chunks:
+                send(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": "fake-session",
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": text},
+                            },
+                        },
+                    }
+                )
+            send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            continue
         if cur == "quota-error":
             send(
                 {

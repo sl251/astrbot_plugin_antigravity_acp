@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Settings
-from .errors import AgyError
+from .errors import AgyError, classified_error
 from .failure_guard import FailureGuard
 from .messages import (
     TRANSIENT_SYSTEM_NOTICE,
@@ -617,6 +617,8 @@ class Runtime:
                                 raw_answer
                             )
                             if not answer.strip():
+                                if result.get("agy_retry_error"):
+                                    raise classified_error(result["agy_retry_error"])
                                 if stripped_notices:
                                     logger.warning(
                                         "AGY 丢弃了 %s 条上游容量告警，剩余正文为空。",

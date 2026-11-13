@@ -29,6 +29,28 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     def test_unrelated_wrapper_mentions_do_not_imply_directory_refusal(self):
         self.assertEqual(remote_error("wrapper exited unexpectedly").code, "UPSTREAM")
 
+    def test_unexpected_eof_variants_map_to_network_with_word_boundaries(self):
+        for text in (
+            "UNAVAILABLE: unexpected EOF",
+            "stream closed: unexpected  eof",
+            "transport failed: unexpected_eof",
+            "read error: unexpected-eof",
+            'Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF',
+            '": EOF',
+            "⚠ The stream was interrupted. Please continue the task you were working on.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(remote_error(text).code, "NETWORK")
+        for non_match in ("unexpected eofmarker", "nonunexpected eof", "eof"):
+            with self.subTest(non_match=non_match):
+                self.assertEqual(remote_error(non_match).code, "UPSTREAM")
+
+    def test_retry_notice_relaxes_bare_eof_case_insensitively(self):
+        for text in ("eof", "EOF", "read failed: Eof", "⚠ API error (attempt 1): eof"):
+            with self.subTest(text=text):
+                self.assertEqual(remote_error(text, retry_notice=True).code, "NETWORK")
+        self.assertEqual(remote_error("eofmarker", retry_notice=True).code, "UPSTREAM")
+
     def test_discovery_scope_respects_explicit_command_without_echoing_it(self):
         result = environment(Settings(command="/private/user/native-cli"))
         self.assertIn("显式 command", result["discovery_hint"])

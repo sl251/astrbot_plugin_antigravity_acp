@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError, classified_error, remote_error
-from .notices import TerminalNoticeGuard
+from .notices import RetryNoticeGuard, TerminalNoticeGuard
 from .process import build_child_env, spawn, stop_process
 
 
@@ -34,8 +34,10 @@ class _AgentTextGuard:
         self.pending = ""
         self.line_start = True
         self.notices = TerminalNoticeGuard()
+        self.retries = RetryNoticeGuard()
 
     def feed(self, text: str, *, final=False) -> str:
+        text = self.retries.feed(text, final=final)
         text = self.pending + self.notices.feed(text, final=final)
         self.pending = ""
         output = []
@@ -523,6 +525,8 @@ class AcpClient:
                     remaining = self.text_guard.feed("", final=True)
                     if remaining:
                         yield Event("text", remaining)
+                    if self.text_guard.retries.error_code:
+                        result = dict(result, agy_retry_error=self.text_guard.retries.error_code)
                     completed = True
                     yield Event("done", result=result)
                     return

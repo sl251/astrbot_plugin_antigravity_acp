@@ -191,3 +191,117 @@ class ConfigTests(unittest.TestCase):
         ):
             with self.assertRaises(AgyError):
                 Settings.from_dict(bad)
+
+    def test_schema_sliders_match_runtime_limits(self):
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        sliders = {
+            key: item["slider"]
+            for key, item in schema.items()
+            if item.get("type") == "int"
+        }
+        self.assertEqual(len(sliders), 18)
+        for key, slider in sliders.items():
+            low, high = slider["min"], slider["max"]
+            base = {"max_sessions": 16} if key == "max_concurrent" else {}
+            if key == "max_sessions":
+                base = {"max_concurrent": 1}
+            self.assertEqual(
+                getattr(Settings.from_dict({**base, key: low}), key), low
+            )
+            self.assertEqual(
+                getattr(Settings.from_dict({**base, key: high}), key), high
+            )
+            for bad in (low - 1, high + 1):
+                with self.assertRaises(AgyError):
+                    Settings.from_dict({**base, key: bad})
+
+    def test_from_dict_strict_rejects_invalid_and_out_of_range_values(self):
+        invalid_cases = (
+            {"tool_max_calls": "abc"},
+            {"tool_max_calls": "16.5"},
+            {"tool_max_calls": 16.5},
+            {"tool_max_calls": 16.0},
+            {"tool_max_calls": True},
+            {"tool_max_calls": False},
+            {"tool_max_calls": None},
+            {"tool_max_calls": 129},
+            {"idle_ttl": 6000},
+            {"max_concurrent": 99},
+            {"max_concurrent": 4, "max_sessions": 2},
+        )
+        for values in invalid_cases:
+            with self.subTest(values=values):
+                with self.assertRaises(AgyError) as caught:
+                    Settings.from_dict(values)
+                self.assertEqual(caught.exception.code, "CONFIG")
+
+    def test_from_dict_repair_restores_defaults_and_reports_callbacks(self):
+        defaults = Settings()
+        for raw in ("abc", "16.5", 16.5, 16.0, True, False, None, float("inf")):
+            repairs = []
+            with self.subTest(raw=raw):
+                settings = Settings.from_dict(
+                    {"tool_max_calls": raw},
+                    on_repair=lambda k, v: repairs.append((k, v)),
+                )
+                self.assertEqual(settings.tool_max_calls, defaults.tool_max_calls)
+                self.assertEqual(repairs, [("tool_max_calls", defaults.tool_max_calls)])
+
+        repairs = []
+        settings = Settings.from_dict(
+            {
+                "tool_max_calls": 129,
+                "idle_ttl": 6000,
+                "max_concurrent": 99,
+            },
+            on_repair=lambda k, v: repairs.append((k, v)),
+        )
+        self.assertEqual(settings.tool_max_calls, defaults.tool_max_calls)
+        self.assertEqual(settings.idle_ttl, defaults.idle_ttl)
+        self.assertEqual(settings.max_concurrent, defaults.max_concurrent)
+        self.assertEqual(
+            dict(repairs),
+            {
+                "tool_max_calls": defaults.tool_max_calls,
+                "idle_ttl": defaults.idle_ttl,
+                "max_concurrent": defaults.max_concurrent,
+            },
+        )
+        self.assertEqual(Settings.from_dict({"tool_max_calls": "16"}).tool_max_calls, 16)
+
+    def test_from_dict_repair_clamps_max_concurrent_to_max_sessions(self):
+        repairs = []
+        settings = Settings.from_dict(
+            {"max_concurrent": 8, "max_sessions": 2},
+            on_repair=lambda k, v: repairs.append((k, v)),
+        )
+        self.assertEqual(settings.max_concurrent, 2)
+        self.assertEqual(settings.max_sessions, 2)
+        self.assertEqual(repairs, [("max_concurrent", 2)])
+
+        repaired = {}
+        settings = Settings.from_dict(
+            {"max_concurrent": 99, "max_sessions": 1},
+            on_repair=repaired.__setitem__,
+        )
+        self.assertEqual(settings.max_concurrent, 1)
+        self.assertEqual(repaired, {"max_concurrent": 1})
+
+    def test_from_dict_repair_keeps_security_fields_strict(self):
+        for bad in (
+            {"command": "relative/agy"},
+            {"proxy_mode": "invalid"},
+            {"proxy_mode": "custom", "proxy_url": "https://127.0.0.1:7890"},
+            {"media_roots": ["relative/path"]},
+            {"thought_level": "extreme"},
+            {"enable_tools": "true"},
+            {"setup_auto_check": "yes"},
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(AgyError) as caught:
+                    Settings.from_dict(bad, on_repair=lambda k, v: None)
+                self.assertEqual(caught.exception.code, "CONFIG")
