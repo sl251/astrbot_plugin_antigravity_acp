@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Settings
-from .errors import AgyError
+from .errors import AgyError, classified_error
 from .messages import ConversationInput, digest, prompt_blocks
 from .models import catalog, select
 from .process import LaunchInfo, discover, launch_args, make_home
@@ -336,6 +336,8 @@ class Runtime:
                                 raw_answer
                             )
                             if not answer.strip():
+                                if result.get("agy_retry_error"):
+                                    raise classified_error(result["agy_retry_error"])
                                 if stripped_notices:
                                     logger.warning(
                                         "AGY 丢弃了 %s 条上游容量告警，剩余正文为空。",

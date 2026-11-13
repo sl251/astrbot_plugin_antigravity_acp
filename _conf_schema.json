@@ -49,50 +49,101 @@
   "startup_timeout": {
     "description": "启动/协议握手超时（秒）",
     "type": "int",
-    "default": 60
+    "default": 60,
+    "slider": {
+      "min": 5,
+      "max": 300,
+      "step": 1
+    },
+    "hint": "合法整数范围 5–300；非法数值在加载时恢复为默认值并告警。"
   },
   "request_timeout": {
     "description": "单轮生成超时（秒）",
     "type": "int",
-    "default": 180
+    "default": 180,
+    "slider": {
+      "min": 10,
+      "max": 1800,
+      "step": 1
+    },
+    "hint": "合法整数范围 10–1800；非法数值在加载时恢复为默认值并告警。"
   },
   "queue_timeout": {
     "description": "排队超时（秒）",
     "type": "int",
-    "default": 60
+    "default": 60,
+    "slider": {
+      "min": 1,
+      "max": 300,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–300；非法数值在加载时恢复为默认值并告警。"
   },
   "max_concurrent": {
     "description": "每个模型实例最大并发请求",
     "type": "int",
     "default": 2,
-    "hint": "低内存机器建议设为 1。"
+    "hint": "低内存机器建议设为 1。 合法整数范围 1–8；非法数值在加载时恢复为默认值并告警。",
+    "slider": {
+      "min": 1,
+      "max": 8,
+      "step": 1
+    }
   },
   "max_sessions": {
     "description": "每个模型实例最多保留会话数",
     "type": "int",
     "default": 4,
-    "hint": "不能小于 max_concurrent；每个保留会话对应一个独立 AGY 进程。"
+    "hint": "不能小于 max_concurrent；每个保留会话对应一个独立 AGY 进程。 合法整数范围 1–16；非法数值在加载时恢复为默认值并告警。",
+    "slider": {
+      "min": 1,
+      "max": 16,
+      "step": 1
+    }
   },
   "max_pending": {
     "description": "每个模型实例最多排队请求数",
     "type": "int",
-    "default": 16
+    "default": 16,
+    "slider": {
+      "min": 1,
+      "max": 128,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–128；非法数值在加载时恢复为默认值并告警。"
   },
   "idle_ttl": {
     "description": "空闲会话回收时间（秒）",
     "type": "int",
-    "default": 600
+    "default": 600,
+    "slider": {
+      "min": 30,
+      "max": 3600,
+      "step": 1
+    },
+    "hint": "合法整数范围 30–3600；非法数值在加载时恢复为默认值并告警。"
   },
   "history_bytes": {
     "description": "历史重放字节预算",
     "type": "int",
     "default": 160000,
-    "hint": "范围 4096–160000；优先保留最新输入，省略旧记录时记录数量。"
+    "hint": "范围 4096–160000；优先保留最新输入，省略旧记录时记录数量。 合法整数范围 4096–160000；非法数值在加载时恢复为默认值并告警。",
+    "slider": {
+      "min": 4096,
+      "max": 160000,
+      "step": 1
+    }
   },
   "max_output_bytes": {
     "description": "单轮正文与思考合计字节上限",
     "type": "int",
-    "default": 4194304
+    "default": 4194304,
+    "slider": {
+      "min": 4096,
+      "max": 8388608,
+      "step": 1
+    },
+    "hint": "合法整数范围 4096–8388608；非法数值在加载时恢复为默认值并告警。"
   },
   "enable_tools": {
     "description": "启用宿主工具桥（需完整工具 schema 与宿主会话）",
@@ -107,47 +158,101 @@
   "tool_max_calls": {
     "description": "单轮最大工具调用次数",
     "type": "int",
-    "default": 16
+    "default": 16,
+    "slider": {
+      "min": 1,
+      "max": 128,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–128；非法数值在加载时恢复为默认值并告警。"
   },
   "tool_max_concurrent": {
     "description": "单轮最大待处理工具数",
     "type": "int",
-    "default": 1
+    "default": 1,
+    "slider": {
+      "min": 1,
+      "max": 8,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–8；非法数值在加载时恢复为默认值并告警。"
   },
   "tool_approval_timeout": {
     "description": "工具交接/审批等待预算（秒）",
     "type": "int",
-    "default": 60
+    "default": 60,
+    "slider": {
+      "min": 1,
+      "max": 300,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–300；非法数值在加载时恢复为默认值并告警。"
   },
   "tool_execution_timeout": {
     "description": "宿主工具执行等待预算（秒）",
     "type": "int",
-    "default": 120
+    "default": 120,
+    "slider": {
+      "min": 1,
+      "max": 1800,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–1800；非法数值在加载时恢复为默认值并告警。"
   },
   "tool_result_bytes": {
     "description": "单轮工具结果总字节预算",
     "type": "int",
-    "default": 262144
+    "default": 262144,
+    "slider": {
+      "min": 1024,
+      "max": 8388608,
+      "step": 1
+    },
+    "hint": "合法整数范围 1024–8388608；非法数值在加载时恢复为默认值并告警。"
   },
   "image_max_count": {
     "description": "单次输入最多图片数",
     "type": "int",
-    "default": 8
+    "default": 8,
+    "slider": {
+      "min": 1,
+      "max": 16,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–16；非法数值在加载时恢复为默认值并告警。"
   },
   "image_max_bytes": {
     "description": "单次输入图片总字节预算",
     "type": "int",
-    "default": 8388608
+    "default": 8388608,
+    "slider": {
+      "min": 1024,
+      "max": 33554432,
+      "step": 1
+    },
+    "hint": "合法整数范围 1024–33554432；非法数值在加载时恢复为默认值并告警。"
   },
   "image_max_pixels": {
     "description": "每张图片最大像素数",
     "type": "int",
-    "default": 20000000
+    "default": 20000000,
+    "slider": {
+      "min": 1,
+      "max": 40000000,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–40000000；非法数值在加载时恢复为默认值并告警。"
   },
   "image_timeout": {
     "description": "单张媒体读取超时（秒）",
     "type": "int",
-    "default": 15
+    "default": 15,
+    "slider": {
+      "min": 1,
+      "max": 60,
+      "step": 1
+    },
+    "hint": "合法整数范围 1–60；非法数值在加载时恢复为默认值并告警。"
   },
   "media_roots": {
     "description": "允许读取的媒体目录（绝对路径，不含符号链接）",

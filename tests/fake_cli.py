@@ -106,6 +106,37 @@ for line in sys.stdin:
                 }
             )
             continue
+        if scenario in {"retry-quota-only", "retry-eof-only", "retry-then-answer"}:
+            chunks = {
+                "retry-quota-only": (
+                    "⚠ API error (attempt 1): UNAVAILABLE ",
+                    "(code 503): No capacity available for model gemini-2.5-pro on the server\n",
+                    "⚠️ API error (attempt 2): UNAVAILABLE (code 503): No capacity available for model gemini-2.5-pro on the server",
+                ),
+                "retry-eof-only": (
+                    "⚠ API error (attempt 1):",
+                    " stream error: unexpected EOF\n",
+                ),
+                "retry-then-answer": (
+                    "⚠️ API error (attempt 1): unexpected EOF\n",
+                    "真实回复内容",
+                ),
+            }[scenario]
+            for text in chunks:
+                send(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": "fake-session",
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": text},
+                            },
+                        },
+                    }
+                )
+            send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            continue
         for kind, text in (
             ("agent_thought_chunk", "fake reasoning"),
             ("agent_message_chunk", "fake answer"),

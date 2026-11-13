@@ -2,7 +2,72 @@
 
 import re
 
-from .errors import classified_error
+from .errors import classified_error, remote_error
+
+
+class RetryNoticeGuard:
+    """Discard complete CLI retry lines before they reach any streaming consumer."""
+
+    heads = ("⚠ API error (attempt ", "⚠️ API error (attempt ")
+    header = re.compile(r"^⚠\ufe0f? API error \(attempt [0-9]+\):")
+
+    def __init__(self):
+        self.pending = ""
+        self.line_start = True
+        self.dropping = False
+        self.diagnostic = ""
+        self.error_code = ""
+
+    def _possible(self, text):
+        for head in self.heads:
+            if head.startswith(text):
+                return True
+            if text.startswith(head):
+                tail = text[len(head):]
+                if re.fullmatch(r"[0-9]+\)?", tail):
+                    return True
+        return False
+
+    def _discard(self, text):
+        # Retain only a bounded diagnostic for classification, never for output.
+        added = text[:max(0, 4096 - len(self.diagnostic))]
+        if added or not self.error_code:
+            self.diagnostic += added
+            self.error_code = remote_error(self.diagnostic).code
+
+    def feed(self, text, *, final=False):
+        text = self.pending + text
+        self.pending = ""
+        output = []
+        while text:
+            line, newline, rest = text.partition("\n")
+            if self.dropping:
+                self._discard(line)
+                if newline:
+                    self.dropping = False
+                    self.diagnostic = ""
+                    self.line_start = True
+                text = rest
+                continue
+            if self.line_start:
+                candidate = line.lstrip()
+                if self.header.match(candidate):
+                    self._discard(candidate)
+                    self.dropping = not bool(newline)
+                    if newline:
+                        self.diagnostic = ""
+                    text = rest
+                    continue
+                if not newline and not final and len(line) <= 4096 and self._possible(candidate):
+                    self.pending = line
+                    break
+            output.append(line + newline)
+            self.line_start = bool(newline)
+            text = rest
+        if final:
+            self.dropping = False
+            self.diagnostic = ""
+        return "".join(output)
 
 
 class TerminalNoticeGuard:

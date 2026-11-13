@@ -10,54 +10,126 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from agy_provider import onboarding as onboarding_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
-from agy_provider.onboarding import Onboarding
+from agy_provider.onboarding import Onboarding, ensure_provider_source
 
 MISSING = object()
 
 
+class FakeDefaultConfig(dict):
+    """Model AstrBotConfig's dict interface and save_config() persistence."""
+
+    def __init__(self, manager):
+        super().__init__(provider=[], provider_sources=[])
+        self._manager = manager
+
+    def save_config(self):
+        self._manager.save()
+
+
 class FakeManager:
-    """Model 4.29.4's load-before-save create and save-before-reload update."""
+    """Model 4.29.4's resource_lock, acm.default_conf, load-before-save create and save-before-reload update."""
 
     def __init__(self):
-        self.providers_config = []
+        self.reload_lock = asyncio.Lock()
+        self.resource_lock = asyncio.Lock()
+        default_conf = FakeDefaultConfig(self)
+        self.acm = types.SimpleNamespace(default_conf=default_conf)
+        self.providers_config = default_conf["provider"]
+        self.provider_sources_config = default_conf["provider_sources"]
         self.persisted = []
+        self.persisted_sources = []
         self.inst_map = {}
         self.default = "original"
         self.fail = ""
         self.creates = 0
 
     def get_merged_provider_config(self, config):
-        return config
+        merged = deepcopy(config)
+        source_id = merged.get("provider_source_id", "")
+        if source_id:
+            source = next(
+                (
+                    row
+                    for row in self.provider_sources_config
+                    if row.get("id") == source_id
+                ),
+                None,
+            )
+            if source:
+                merged = {**source, **merged}
+                merged["id"] = config["id"]
+        return merged
 
     def save(self):
         if self.fail == "save":
             raise OSError("private host path must not escape")
-        self.persisted = deepcopy(self.providers_config)
+        default_conf = self.acm.default_conf
+        self.persisted = deepcopy(default_conf["provider"])
+        self.persisted_sources = deepcopy(default_conf.get("provider_sources", []))
+
+    async def load_provider(self, config):
+        merged = self.get_merged_provider_config(config)
+        if not merged.get("enable"):
+            return
+        self.inst_map[config["id"]] = object()
 
     async def create_provider(self, config):
-        self.creates += 1
-        if self.fail == "create":
-            raise ValueError("private details")
-        self.providers_config.append(deepcopy(config))
-        self.inst_map[config["id"]] = object()
-        self.save()
+        async with self.resource_lock:
+            self.creates += 1
+            if self.fail == "create":
+                raise ValueError("private details")
+            npid = config.get("id")
+            if not npid:
+                raise ValueError("New provider config must have an 'id' field")
+            default_conf = self.acm.default_conf
+            if any(row.get("id") == npid for row in default_conf["provider"]):
+                raise ValueError(f"Provider ID {npid} already exists")
+            stored = deepcopy(config)
+            default_conf["provider"].append(stored)
+            try:
+                await self.load_provider(stored)
+            except Exception:
+                default_conf["provider"].remove(stored)
+                raise
+            default_conf.save_config()
+            self.providers_config = default_conf["provider"]
 
     async def update_provider(self, provider_id, config):
-        self.providers_config[:] = [
-            deepcopy(config) if row["id"] == provider_id else row
-            for row in self.providers_config
-        ]
-        self.save()
-        await self.reload(config)
+        async with self.resource_lock:
+            npid = config.get("id")
+            if not npid:
+                raise ValueError("New provider config must have an 'id' field")
+            default_conf = self.acm.default_conf
+            for row in default_conf["provider"]:
+                if row.get("id") == npid and row.get("id") != provider_id:
+                    raise ValueError(f"Provider ID {npid} already exists")
+            for idx, row in enumerate(default_conf["provider"]):
+                if row.get("id") == provider_id:
+                    default_conf["provider"][idx] = deepcopy(config)
+                    break
+            else:
+                raise ValueError(f"Provider ID {provider_id} not found")
+            default_conf.save_config()
+            await self.reload(config)
 
     async def reload(self, config):
-        if self.fail == "reload":
-            raise ValueError("private details")
-        self.inst_map[config["id"]] = object()
+        async with self.reload_lock:
+            if self.fail == "reload":
+                raise ValueError("private details")
+            merged = self.get_merged_provider_config(config)
+            if merged.get("enable"):
+                self.inst_map[config["id"]] = object()
+            else:
+                self.inst_map.pop(config["id"], None)
+            self.providers_config = self.acm.default_conf["provider"]
+            self.provider_sources_config = self.acm.default_conf.get("provider_sources", [])
 
     async def set_provider(self, provider_id, provider_type, umo=None):
+        if provider_id not in self.inst_map:
+            raise ValueError(f"Provider {provider_id} does not exist and cannot be set.")
         if self.fail == "default":
             raise OSError("private details")
         self.default = provider_id
@@ -326,6 +398,170 @@ class OnboardingTests(unittest.IsolatedAsyncioTestCase):
         await closing
         self.assertEqual(self.manager.persisted, self.manager.providers_config)
         self.assertEqual(len(self.manager.persisted), 1)
+        self.assertEqual(len(self.manager.persisted_sources), 1)
+        self.assertEqual(
+            self.manager.persisted[0]["provider_source_id"],
+            self.manager.persisted_sources[0]["id"],
+        )
+
+    async def test_create_save_failure_retains_loaded_and_retry_reuses(self):
+        saves = 0
+        original_save = self.manager.save
+
+        def fail_second_save():
+            nonlocal saves
+            saves += 1
+            if saves == 2:
+                raise OSError("disk full during create save")
+            original_save()
+
+        self.manager.save = fail_second_save
+        await self.apply()
+        self.assertEqual(self.service.action_error, "HOST")
+        self.assertIsNone(self.service.result)
+        self.assertEqual(self.manager.persisted, [])
+        self.assertEqual(len(self.manager.providers_config), 1)
+
+        await self.apply()
+        self.assertIsNotNone(self.service.result)
+        self.assertEqual(self.manager.persisted, self.manager.providers_config)
+        self.assertEqual(self.manager.creates, 1)
+
+    async def test_ensure_provider_source_idempotent(self):
+        first = await ensure_provider_source(self.manager)
+        second = await ensure_provider_source(self.manager)
+        self.assertEqual(first, "agy_acp")
+        self.assertEqual(second, "agy_acp")
+        self.assertEqual(len(self.manager.persisted_sources), 1)
+        self.assertEqual(len(self.manager.provider_sources_config), 1)
+
+    async def test_ensure_provider_source_preserves_other_sources_and_displaces_collision(self):
+        other_same_id = {
+            "id": "agy_acp",
+            "type": "openai_chat_completion",
+            "provider": "openai",
+            "provider_type": "chat_completion",
+            "enable": True,
+        }
+        other_provider_type = {
+            "id": "agy_acp_2",
+            "type": "agy_acp",
+            "provider": "agy_acp",
+            "provider_type": "embedding",
+            "enable": True,
+        }
+        self.manager.acm.default_conf["provider_sources"].extend(
+            [deepcopy(other_same_id), deepcopy(other_provider_type)]
+        )
+        self.manager.providers_config.append(
+            {"id": "legacy_agy", "type": "agy_acp", "model": "gemini-test", "enable": True}
+        )
+
+        source_id = await ensure_provider_source(self.manager)
+        self.assertEqual(source_id, "agy_acp_3")
+        sources = self.manager.persisted_sources
+        self.assertEqual(sources[0], other_same_id)
+        self.assertEqual(sources[1], other_provider_type)
+        self.assertEqual(sources[2]["id"], "agy_acp_3")
+        self.assertEqual(self.manager.persisted[0]["provider_source_id"], "agy_acp_3")
+        self.assertEqual(self.manager.providers_config, self.manager.persisted)
+
+    async def test_ensure_provider_source_rollback_on_save_failure(self):
+        no_source_key = {
+            "id": "agy_missing_key",
+            "type": "agy_acp",
+            "model": "gemini-test",
+            "enable": True,
+        }
+        stale_source = {
+            "id": "agy_stale",
+            "type": "agy_acp",
+            "model": "gemini-test",
+            "enable": True,
+            "provider_source_id": "deleted_source",
+        }
+        other_provider = {
+            "id": "openai_1",
+            "type": "openai",
+            "model": "gpt-test",
+            "enable": True,
+        }
+        self.manager.providers_config.extend(
+            [no_source_key, stale_source, other_provider]
+        )
+        self.manager.fail = "save"
+
+        with self.assertRaises(OSError):
+            await ensure_provider_source(self.manager)
+
+        self.assertEqual(self.manager.acm.default_conf["provider_sources"], [])
+        self.assertNotIn("provider_source_id", no_source_key)
+        self.assertEqual(stale_source["provider_source_id"], "deleted_source")
+        self.assertNotIn("provider_source_id", other_provider)
+        self.assertEqual(self.manager.persisted, [])
+        self.assertEqual(self.manager.persisted_sources, [])
+
+    async def test_providers_config_consistent_with_persisted_after_binding(self):
+        self.manager.providers_config.append(
+            {"id": "agy_existing", "type": "agy_acp", "model": "gemini-other", "enable": True}
+        )
+        await ensure_provider_source(self.manager)
+        self.assertEqual(self.manager.providers_config, self.manager.persisted)
+        self.assertEqual(
+            self.manager.provider_sources_config, self.manager.persisted_sources
+        )
+        await self.apply()
+        self.assertEqual(self.manager.providers_config, self.manager.persisted)
+        self.assertTrue(
+            all(row.get("provider_source_id") == "agy_acp" for row in self.manager.persisted)
+        )
+
+    async def test_legacy_host_missing_interfaces_skips_source_binding_and_saves(self):
+        class LegacyHostManager:
+            def __init__(self, *, has_lock=False, default_conf=MISSING):
+                if has_lock:
+                    self.resource_lock = asyncio.Lock()
+                if default_conf is not MISSING:
+                    self.acm = types.SimpleNamespace(default_conf=default_conf)
+                self.providers_config = []
+                self.persisted = []
+                self.inst_map = {}
+
+            def get_merged_provider_config(self, config):
+                return config
+
+            async def create_provider(self, config):
+                self.providers_config.append(deepcopy(config))
+                self.inst_map[config["id"]] = object()
+                self.persisted = deepcopy(self.providers_config)
+
+            async def update_provider(self, provider_id, config):
+                self.providers_config[:] = [
+                    deepcopy(config) if row["id"] == provider_id else row
+                    for row in self.providers_config
+                ]
+                self.persisted = deepcopy(self.providers_config)
+
+        bad_conf = types.SimpleNamespace(get=lambda *a: [], save_config=lambda: None)
+        no_sources_conf = FakeDefaultConfig(types.SimpleNamespace(save=lambda: None))
+        del no_sources_conf["provider_sources"]
+
+        for label, legacy in (
+            ("missing_resource_lock", LegacyHostManager(has_lock=False)),
+            ("missing_acm", LegacyHostManager(has_lock=True, default_conf=MISSING)),
+            ("none_default_conf", LegacyHostManager(has_lock=True, default_conf=None)),
+            ("missing_provider_sources_key", LegacyHostManager(has_lock=True, default_conf=no_sources_conf)),
+            ("non_dict_default_conf", LegacyHostManager(has_lock=True, default_conf=bad_conf)),
+        ):
+            with self.subTest(label=label):
+                self.context.provider_manager = legacy
+                with self.assertLogs(onboarding_module.logger, level="WARNING") as logs:
+                    await self.apply()
+                self.assertEqual(self.service.action_error, "")
+                self.assertIsNotNone(self.service.result)
+                self.assertEqual(len(legacy.persisted), 1)
+                self.assertNotIn("provider_source_id", legacy.persisted[0])
+                self.assertTrue(logs.output)
 
 
 if __name__ == "__main__":

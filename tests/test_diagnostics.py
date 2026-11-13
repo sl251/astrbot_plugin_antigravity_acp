@@ -29,6 +29,19 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     def test_unrelated_wrapper_mentions_do_not_imply_directory_refusal(self):
         self.assertEqual(remote_error("wrapper exited unexpectedly").code, "UPSTREAM")
 
+    def test_unexpected_eof_variants_map_to_network_with_word_boundaries(self):
+        for text in (
+            "UNAVAILABLE: unexpected EOF",
+            "stream closed: unexpected  eof",
+            "transport failed: unexpected_eof",
+            "read error: unexpected-eof",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(remote_error(text).code, "NETWORK")
+        for non_match in ("unexpected eofmarker", "nonunexpected eof"):
+            with self.subTest(non_match=non_match):
+                self.assertEqual(remote_error(non_match).code, "UPSTREAM")
+
     def test_discovery_scope_respects_explicit_command_without_echoing_it(self):
         result = environment(Settings(command="/private/user/native-cli"))
         self.assertIn("显式 command", result["discovery_hint"])

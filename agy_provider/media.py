@@ -103,57 +103,58 @@ def _png(data, pixel_limit):
 
 
 def _jpeg(data, pixel_limit):
-    if not data.endswith(b"\xff\xd9"):
-        raise _error()
     pos, frame, saw_scan = 2, False, False
     # JPEG entropy data is not decoded here; every SOF must agree with the
     # accepted frame and dimensions. DNL/unknown frames are rejected.
-    while pos < len(data) - 2:
+    while pos < len(data):
         if data[pos] != 0xFF:
-            raise _error()
+            raise _error("IMAGE_FORMAT", "JPEG 标记结构无效。")
         while pos < len(data) and data[pos] == 0xFF:
             pos += 1
         if pos >= len(data):
-            raise _error()
+            break
         marker = data[pos]
         pos += 1
+        if marker == 0xD9:
+            if not frame or not saw_scan:
+                raise _error("IMAGE_FORMAT", "JPEG 缺少图像帧或扫描数据。")
+            # Only an EOI reached through the marker structure ends the image.
+            # Ignore client trailers, including trailers containing another EOI.
+            return pos
         if marker not in {0xC0, 0xC2, 0xC4, 0xDB, 0xDD, 0xDA, 0xFE, *range(0xE0, 0xF0)}:
-            raise _error()
+            raise _error("IMAGE_FORMAT", "JPEG 包含无效或不支持的标记。")
         if pos + 2 > len(data):
-            raise _error()
+            raise _error("IMAGE_FORMAT", "JPEG 标记长度被截断。")
         size = struct.unpack_from(">H", data, pos)[0]
-        if size < 2 or pos + size > len(data) - 2:
-            raise _error()
+        if size < 2 or pos + size > len(data):
+            raise _error("IMAGE_FORMAT", "JPEG 数据段长度无效或被截断。")
         body = data[pos + 2 : pos + size]
         pos += size
         if marker in {0xC0, 0xC2}:
             if frame or len(body) < 6 or body[0] != 8:
-                raise _error()
+                raise _error("IMAGE_FORMAT", "JPEG 帧头无效或不是 8 位图像。")
             height, width = struct.unpack_from(">HH", body, 1)
             _pixels(width, height, pixel_limit)
             components = body[5]
             if components not in {1, 3} or len(body) != 6 + 3 * components:
                 raise _error("IMAGE_FORMAT", "JPEG 仅支持 8 位灰度或 RGB。")
             frame = True
-        elif marker in set(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}:
-            raise _error("IMAGE_FORMAT", "不支持此 JPEG 帧格式。")
-        elif marker == 0xDC:
-            raise _error()
         elif marker == 0xDA:
             if not frame or not body or len(body) != 1 + 2 * body[0] + 3:
-                raise _error()
+                raise _error("IMAGE_FORMAT", "JPEG 扫描头无效或缺少图像帧。")
             saw_scan = True
             # Walk entropy bytes, honoring stuffed FF bytes and restart markers.
-            while pos < len(data) - 2:
+            while pos < len(data):
                 if data[pos] != 0xFF:
                     pos += 1
                     continue
+                if pos + 1 >= len(data):
+                    break
                 if data[pos + 1] == 0 or 0xD0 <= data[pos + 1] <= 0xD7:
                     pos += 2
                     continue
                 break
-    if not frame or not saw_scan or pos != len(data) - 2:
-        raise _error()
+    raise _error("IMAGE_EOI", "JPEG 缺少有效 EOI 结束标记，图片可能被截断。")
 
 
 def validate_image(data: bytes, declared: str | None, settings) -> dict:
@@ -164,7 +165,7 @@ def validate_image(data: bytes, declared: str | None, settings) -> dict:
         _png(data, settings.image_max_pixels)
     elif data.startswith(b"\xff\xd8\xff"):
         mime = "image/jpeg"
-        _jpeg(data, settings.image_max_pixels)
+        data = data[:_jpeg(data, settings.image_max_pixels)]
     else:
         raise _error("IMAGE_FORMAT", "仅支持实际内容为 PNG 或 JPEG 的图片。")
     if declared is not None and declared.lower().split(";", 1)[0].strip() != mime:

@@ -1,5 +1,13 @@
 # 变更记录
 
+## 0.4.4
+
+- 修复历史配置中的非法数值导致插件无法加载、且 WebUI 改回合法值仍无法保存/重载的问题（#5）：`Settings.from_dict` 新增 `on_repair` 启动修复模式，无效整数（如 `tool_max_calls>128`、`idle_ttl>3600`）自动恢复为默认值，`max_concurrent>max_sessions` 冲突自动钳制，修正值写盘并告警；探测与向导的即时校验保持严格拒绝。`_conf_schema.json` 为全部数值项补充合法范围滑杆与提示。
+- 修复微信等客户端 JPEG 图片因 EOI 之后存在附加元数据被整体判为「图片无效」的问题（#6）：`_jpeg` 改为结构化遍历标记与熵流，在首个合法 EOI 处截止并裁剪尾部附加字节（包括附加数据中再嵌 FFD9 的情况）；真截断（缺 EOI）仍拒绝并报 `IMAGE_EOI`。
+- 修复上游 CLI 重试告警「⚠ API error (attempt N): …」被当作助手正文发给用户的问题（#7）：新增 `RetryNoticeGuard` 流式过滤，跨 chunk 拆分的重试行不再泄漏分片；重试后带正常正文时只保留正文，整轮仅剩重试时按真实错误分类（`QUOTA`/`NETWORK` 等）抛出并触发宿主 fallback；`unexpected EOF` 归类为 `NETWORK`。
+- 修复已保存模型不出现在「模型提供商」页的问题（#4，部分）：插件启动与向导保存时自动创建并持久化 `provider_sources` 来源、为模型绑定 `provider_source_id`（AstrBot 4.29 模型页按来源分组过滤，缺失绑定即不显示）；旧版宿主缺相应接口时跳过绑定并告警，不影响向导保存。连通性测试耗时较长（40–80 秒级）未在本轮处理，测试按钮仍执行真实生成请求。
+- 测试：新增/扩充 32 项离线用例（配置自愈、JPEG 结构与裁剪、重试行全切分点过滤、来源绑定回滚幂等与旧宿主降级），全量 128 项通过（1 项平台相关跳过）；`node --test tests/setup.test.mjs` 11/11。
+
 ## 0.4.3
 
 - 修复上游 Antigravity CLI 容量不足（`503 UNAVAILABLE: No capacity available`）时，CLI 的重试告警被当作助手正文发给用户的问题：新增 `strip_upstream_capacity_notices`，过滤 `⚠ API error (attempt N)` 告警行、保留真实回答。

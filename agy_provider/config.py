@@ -41,7 +41,12 @@ class Settings:
     image_timeout: int = 15
 
     @classmethod
-    def from_dict(cls, values: dict) -> "Settings":
+    def from_dict(cls, values: dict, *, on_repair=None) -> "Settings":
+        """Validate strictly, or repair numeric budgets during plugin startup.
+
+        Security-sensitive paths, proxy settings and feature switches remain
+        strict. The callback receives only a field name and its safe replacement.
+        """
         limits = {
             "tool_max_calls": (1, 128),
             "tool_max_concurrent": (1, 8),
@@ -93,9 +98,15 @@ class Settings:
                     raise ValueError
                 value = int(raw)
             except (TypeError, ValueError, OverflowError):
-                raise AgyError("CONFIG", f"{key} 必须是整数。") from None
+                if on_repair is None:
+                    raise AgyError("CONFIG", f"{key} 必须是整数。") from None
+                value = getattr(defaults, key)
+                on_repair(key, value)
             if not low <= value <= high:
-                raise AgyError("CONFIG", f"{key} 范围为 {low}–{high}。")
+                if on_repair is None:
+                    raise AgyError("CONFIG", f"{key} 范围为 {low}–{high}。")
+                value = getattr(defaults, key)
+                on_repair(key, value)
             parsed[key] = value
         command = str(values.get("command", "")).strip()
         if command and not Path(command).expanduser().is_absolute():
@@ -106,7 +117,10 @@ class Settings:
         if effort not in {"default", "low", "medium", "high"}:
             raise AgyError("CONFIG", "thought_level 应为 default/low/medium/high。")
         if parsed["max_concurrent"] > parsed["max_sessions"]:
-            raise AgyError("CONFIG", "max_sessions 不能小于 max_concurrent。")
+            if on_repair is None:
+                raise AgyError("CONFIG", "max_sessions 不能小于 max_concurrent。")
+            parsed["max_concurrent"] = parsed["max_sessions"]
+            on_repair("max_concurrent", parsed["max_concurrent"])
         return cls(command=command, thought_level=effort, **parsed)
 
 

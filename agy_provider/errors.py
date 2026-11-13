@@ -102,7 +102,7 @@ def remote_error(error: object) -> AgyError:
             r"enotfound|eai_again|econnrefused|econnreset|enetunreach|ehostunreach|"
             r"connection.(?:refused|reset)|network.(?:unreachable|error)|"
             r"getaddrinfo[\s:_-]+(?:failed|failure|error)|"
-            r"name.or.service.not.known|failed.to.fetch|fetch.failed",
+            r"name.or.service.not.known|failed.to.fetch|fetch.failed|\bunexpected[\s_-]+eof\b",
         ),
         (
             "AUTH",
