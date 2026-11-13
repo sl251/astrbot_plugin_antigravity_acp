@@ -327,6 +327,54 @@ class OnboardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.persisted, self.manager.providers_config)
         self.assertEqual(len(self.manager.persisted), 1)
 
+    async def test_tools_mode_chat_omits_tool_use_and_allows_separate_tools_instance(self):
+        self.service.settings = Settings(enable_tools=True)
+        resp_chat = await self.call(
+            "apply",
+            {
+                "csrf": self.service.csrf,
+                "model": "gemini-test",
+                "effort": "default",
+                "tools_mode": "chat",
+                "use_default": False,
+            },
+        )
+        self.assertEqual(resp_chat["status_code"], 200)
+        await self.service.job
+        chat_cfg = self.manager.providers_config[0]
+        self.assertEqual(chat_cfg["custom_extra_body"]["agy_tools_mode"], "chat")
+        self.assertNotIn("tool_use", chat_cfg["modalities"])
+
+        resp_tools = await self.call(
+            "apply",
+            {
+                "csrf": self.service.csrf,
+                "model": "gemini-test",
+                "effort": "default",
+                "tools_mode": "tools",
+                "use_default": False,
+            },
+        )
+        self.assertEqual(resp_tools["status_code"], 200)
+        await self.service.job
+        self.assertEqual(len(self.manager.providers_config), 2)
+        tools_cfg = self.manager.providers_config[1]
+        self.assertEqual(tools_cfg["custom_extra_body"]["agy_tools_mode"], "tools")
+        self.assertIn("tool_use", tools_cfg["modalities"])
+        self.assertNotEqual(chat_cfg["id"], tools_cfg["id"])
+
+        bad = await self.call(
+            "apply",
+            {
+                "csrf": self.service.csrf,
+                "model": "gemini-test",
+                "effort": "default",
+                "tools_mode": "invalid",
+                "use_default": False,
+            },
+        )
+        self.assertEqual(bad["status_code"], 400)
+
 
 if __name__ == "__main__":
     unittest.main()

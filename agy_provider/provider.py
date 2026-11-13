@@ -18,6 +18,7 @@ from .media import prepare_media
 from .messages import digest, normalize
 from .paths import plugin_data_root
 from .sessions import Runtime
+from .telemetry import TurnMeter
 from .tool_turn import chat_events
 from .tools import ToolSnapshot
 
@@ -32,7 +33,10 @@ DEFAULT_CONFIG = {
     "key": [""],
     "model": "",
     "modalities": ["text"],
-    "custom_extra_body": {"agy_thought_level": "default"},
+    "custom_extra_body": {
+        "agy_thought_level": "default",
+        "agy_tools_mode": "inherit",
+    },
 }
 _settings = Settings()
 _instances: WeakSet = WeakSet()
@@ -46,6 +50,50 @@ def configure(settings: Settings) -> None:
 async def terminate_all() -> None:
     # Also includes temporary model-list providers made by the dashboard.
     await asyncio.gather(*(instance.terminate() for instance in list(_instances)))
+
+
+def resolve_tools_mode(
+    plugin_enabled: bool, provider_mode: str, tool_choice: str
+) -> bool:
+    """Resolve effective tool usage; plugin enable_tools is the master switch."""
+    if not isinstance(provider_mode, str) or provider_mode not in {
+        "inherit",
+        "chat",
+        "tools",
+    }:
+        raise AgyError("CONFIG", "agy_tools_mode 必须为 inherit/chat/tools。")
+    if not plugin_enabled or provider_mode == "chat" or tool_choice == "none":
+        return False
+    return True
+
+
+def active_instances() -> list:
+    return [inst for inst in list(_instances) if not inst.runtime.stopped]
+
+
+def instance_cost_snapshots() -> list[dict]:
+    rows = []
+    for inst in active_instances():
+        extra = inst.provider_config.get("custom_extra_body") or {}
+        tools_mode = extra.get("agy_tools_mode", "inherit")
+        if tools_mode not in {"inherit", "chat", "tools"}:
+            tools_mode = "invalid"
+        effective_mode = (
+            "tools"
+            if inst.settings.enable_tools and tools_mode in {"inherit", "tools"}
+            else "chat"
+        )
+        rows.append(
+            {
+                "provider_id": inst.provider_id,
+                "model": inst.get_model(),
+                "tools_mode": tools_mode,
+                "effective_mode": effective_mode,
+                "summary": inst.runtime.telemetry.summarize(),
+                "pool": inst.runtime.pool_stats(),
+            }
+        )
+    return rows
 
 
 def token_usage(result: dict) -> TokenUsage | None:
@@ -125,13 +173,14 @@ class AgyProvider(Provider):
     def __init__(self, provider_config: dict, provider_settings: dict):
         super().__init__(provider_config, provider_settings)
         self.settings = _settings
+        self.provider_id = str(provider_config.get("id", PROVIDER_TYPE))
         self.set_model(
             str(
                 provider_config.get("model")
                 or (provider_config.get("model_config") or {}).get("model", "")
             )
         )
-        namespace = digest(str(provider_config.get("id", PROVIDER_TYPE)))[:16]
+        namespace = digest(self.provider_id)[:16]
         root = plugin_data_root(Path(get_astrbot_plugin_data_path())) / namespace
         self.runtime = Runtime(self.settings, root)
         self.warned_tools = False
@@ -227,6 +276,29 @@ class AgyProvider(Provider):
         )
         signal = kwargs.get("abort_signal")
         approver = kwargs.get("agy_tool_approver")
+        logical_request_id = kwargs.get("agy_request_id") or kwargs.get("request_id")
+        if not isinstance(logical_request_id, str) or not logical_request_id:
+            logical_request_id = None
+
+        extra = self.provider_config.get("custom_extra_body") or {}
+        provider_mode = extra.get("agy_tools_mode", "inherit")
+        selected = str(model or self.get_model() or "")
+        effort_raw = kwargs.get(
+            "agy_thought_level", extra.get("agy_thought_level", "default")
+        )
+        effort = (
+            self.settings.thought_level if effort_raw == "default" else effort_raw
+        )
+
+        existing_turn = self.runtime.turns.get(key) if key is not None else None
+        meter: TurnMeter | None = existing_turn.meter if existing_turn else None
+        is_existing_turn = existing_turn is not None
+        claimed_half_open: tuple[str, str] | None = None
+        snapshot = ToolSnapshot(None)
+        request = None
+        continuation = False
+        request_fingerprint: str | None = None
+
         try:
             if approver is not None and not inspect.iscoroutinefunction(approver):
                 raise AgyError(
@@ -240,16 +312,18 @@ class AgyProvider(Provider):
                 raise AgyError(
                     "TOOL_CHOICE", "只支持 auto/none；required 和指定函数不可可靠实现。"
                 )
-            if not self.settings.enable_tools and tool_calls_result:
-                raise AgyError("TOOLS_DISABLED", "工具能力尚未启用。")
+            tools_for_prompt = resolve_tools_mode(
+                self.settings.enable_tools, provider_mode, tool_choice
+            )
+            tools_allowed_in_history = resolve_tools_mode(
+                self.settings.enable_tools, provider_mode, "auto"
+            )
+            if not tools_allowed_in_history and tool_calls_result:
+                raise AgyError("TOOLS_DISABLED", "当前实例或插件未启用工具能力。")
             if func_tool and not self.settings.enable_tools and not self.warned_tools:
                 logger.warning("AGY enable_tools=false，未向 CLI 提供宿主工具。")
                 self.warned_tools = True
-            snapshot = ToolSnapshot(
-                func_tool
-                if self.settings.enable_tools and tool_choice == "auto"
-                else None
-            )
+            snapshot = ToolSnapshot(func_tool if tools_for_prompt else None)
             if snapshot.skipped:
                 logger.warning(
                     f"AGY 工具桥跳过 {len(snapshot.skipped)} 个不兼容工具 schema："
@@ -287,6 +361,8 @@ class AgyProvider(Provider):
                         self.settings.history_bytes,
                         tools=True,
                         images=self.settings.enable_images,
+                        trusted_parts=kwargs.get("agy_context_parts"),
+                        reuse_mode=self.settings.session_reuse_mode,
                     )
                     raw_contexts = base.messages
                     system_prompt = base.system
@@ -324,21 +400,16 @@ class AgyProvider(Provider):
                 system_prompt,
                 parts,
                 self.settings.history_bytes,
-                tools=self.settings.enable_tools,
+                tools=tools_allowed_in_history,
                 images=self.settings.enable_images,
                 continuation=continuation,
+                trusted_parts=kwargs.get("agy_context_parts"),
+                reuse_mode=self.settings.session_reuse_mode,
             )
-            selected = model or self.get_model()
             if not selected:
                 raise AgyError(
                     "MODEL", "请先获取 Gemini 模型列表并在 AstrBot 中选择具体模型。"
                 )
-            extra = self.provider_config.get("custom_extra_body") or {}
-            effort = kwargs.get(
-                "agy_thought_level", extra.get("agy_thought_level", "default")
-            )
-            if effort == "default":
-                effort = self.settings.thought_level
             if not isinstance(effort, str) or effort not in {
                 "default",
                 "low",
@@ -348,19 +419,112 @@ class AgyProvider(Provider):
                 raise AgyError(
                     "CONFIG", "agy_thought_level 必须为 default/low/medium/high。"
                 )
-        except BaseException:
+
+            request_fingerprint = digest(
+                [
+                    self.provider_id,
+                    key or "",
+                    request.hashes,
+                    request.system_hash,
+                    request.system_structured,
+                    request.transient_hash,
+                    selected,
+                    effort,
+                    snapshot.fingerprint,
+                ]
+            )
+            if meter is None:
+                meter = self.runtime.telemetry.start_turn(
+                    provider=self.provider_id,
+                    session_key_raw=key,
+                    mode="tools" if snapshot.tools else "chat",
+                    model=selected,
+                    effort=effort,
+                    system_bytes=request.system_bytes,
+                    transient_bytes=len((request.transient_data or "").encode()),
+                    tool_schema_bytes=snapshot.schema_bytes,
+                )
+
+            if not continuation and not is_existing_turn:
+                guard_check = await self.runtime.failure_guard.check(
+                    (self.provider_id, selected),
+                    request_fingerprint,
+                    logical_request_id,
+                    session_key=key,
+                    empty_ttl=self.settings.empty_dedupe_ttl,
+                    quota_ttl=self.settings.quota_cooldown,
+                    continuation=False,
+                )
+                if not guard_check.allowed:
+                    meter.origin_turn_id = guard_check.origin_turn_id
+                    meter.finish(
+                        status="short_circuited", error_code=guard_check.code
+                    )
+                    raise AgyError(
+                        guard_check.code or "QUOTA",
+                        f"AGY 短期抑制/冷却（origin_turn_id={guard_check.origin_turn_id}，"
+                        f"请约 {guard_check.retry_after} 秒后再试）。",
+                        retry_after=guard_check.retry_after,
+                        origin_turn_id=guard_check.origin_turn_id,
+                        no_retry=True,
+                    )
+                claimed_half_open = guard_check.half_open_scope
+        except BaseException as exc:
+            self.runtime.failure_guard.release_probe(claimed_half_open)
+            cancelled = isinstance(exc, asyncio.CancelledError)
+            code = exc.code if isinstance(exc, AgyError) else ("CANCELLED" if cancelled else "CONFIG")
+            if meter is None:
+                meter = self.runtime.telemetry.start_turn(
+                    provider=self.provider_id,
+                    session_key_raw=key,
+                    mode="tools" if snapshot.tools else "chat",
+                    model=selected,
+                    effort=effort if isinstance(effort, str) else "default",
+                )
+            if not (isinstance(exc, AgyError) and exc.no_retry):
+                meter.finish(
+                    status="cancelled" if cancelled else "error", error_code=code
+                )
             pending = self.runtime.turns.pop(key, None)
             if pending:
                 await pending.close()
             raise
+
         if snapshot.tools or key in self.runtime.turns or continuation:
             source = chat_events(
-                self.runtime, request, key, selected, effort, snapshot, signal, approver
+                self.runtime,
+                request,
+                key,
+                selected,
+                effort,
+                snapshot,
+                signal,
+                approver,
+                meter=meter,
+                provider_id=self.provider_id,
+                logical_request_id=logical_request_id,
+                request_fingerprint=request_fingerprint,
+                claimed_half_open=claimed_half_open,
             )
         else:
-            source = self.runtime.stream(request, key, selected, effort)
+            source = self.runtime.stream(
+                request,
+                key,
+                selected,
+                effort,
+                meter=meter,
+                provider_id=self.provider_id,
+                logical_request_id=logical_request_id,
+                request_fingerprint=request_fingerprint,
+                continuation=False,
+                claimed_half_open=claimed_half_open,
+            )
         events = abortable(source, signal)
         text_parts, thoughts = [], []
+        handed_off = False
+        done_seen = False
+        exit_status = "cancelled"
+        exit_code: str | None = "CANCELLED"
         try:
             async for event in events:
                 if event.kind == "text":
@@ -382,6 +546,7 @@ class AgyProvider(Provider):
                         (event.result or {}).get("omitted_messages", 0),
                     )
                 elif event.kind == "tools":
+                    handed_off = True
                     call = event.result["call"]
                     yield LLMResponse(
                         role="assistant",
@@ -393,6 +558,9 @@ class AgyProvider(Provider):
                         is_chunk=False,
                     )
                 elif event.kind == "done":
+                    done_seen = True
+                    exit_status = "ok"
+                    exit_code = None
                     result = event.result or {}
                     if result.get("stopReason") == "max_tokens":
                         logger.warning(
@@ -405,5 +573,19 @@ class AgyProvider(Provider):
                         usage=token_usage(result),
                         is_chunk=False,
                     )
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                exit_status = "cancelled"
+                exit_code = "CANCELLED"
+            elif isinstance(exc, AgyError):
+                exit_status = "error"
+                exit_code = exc.code
+            else:
+                exit_status = "error"
+                exit_code = "UPSTREAM"
+            raise
         finally:
             await events.aclose()
+            if not handed_off and not done_seen and not meter.finished:
+                self.runtime.failure_guard.release_probe(claimed_half_open)
+                meter.finish(status=exit_status, error_code=exit_code)

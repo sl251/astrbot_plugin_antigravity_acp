@@ -29,6 +29,10 @@ class Settings:
     max_output_bytes: int = 4194304
     enable_tools: bool = False
     enable_images: bool = False
+    session_reuse_mode: str = "strict"
+    cost_log_enabled: bool = False
+    empty_dedupe_ttl: int = 30
+    quota_cooldown: int = 60
     tool_max_calls: int = 16
     tool_max_concurrent: int = 1
     tool_approval_timeout: int = 60
@@ -61,14 +65,26 @@ class Settings:
             "idle_ttl": (30, 3600),
             "history_bytes": (4096, 160000),
             "max_output_bytes": (4096, 8388608),
+            "empty_dedupe_ttl": (0, 300),
+            "quota_cooldown": (0, 300),
         }
         parsed = {}
         defaults = cls()
-        for key in ("enable_tools", "enable_images", "auth_bridge", "setup_auto_check"):
+        for key in (
+            "enable_tools",
+            "enable_images",
+            "auth_bridge",
+            "setup_auto_check",
+            "cost_log_enabled",
+        ):
             value = values.get(key, getattr(defaults, key))
             if type(value) is not bool:
                 raise AgyError("CONFIG", f"{key} 必须是布尔值。")
             parsed[key] = value
+        reuse_mode = values.get("session_reuse_mode", defaults.session_reuse_mode)
+        if not isinstance(reuse_mode, str) or reuse_mode not in {"strict", "structured"}:
+            raise AgyError("CONFIG", "session_reuse_mode 应为 strict/structured。")
+        parsed["session_reuse_mode"] = reuse_mode
         mode = values.get("proxy_mode", defaults.proxy_mode)
         proxy_url = values.get("proxy_url", defaults.proxy_url)
         if not isinstance(mode, str) or mode not in {"inherit", "custom", "direct"}:

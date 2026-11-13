@@ -152,3 +152,42 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(AgyError) as caught:
                 Settings.from_dict({"proxy_mode": "custom", "proxy_url": url})
             self.assertNotIn("fake-password", str(caught.exception))
+
+    def test_v050_defaults_validation_and_backward_compatibility(self):
+        defaults = Settings()
+        self.assertEqual(defaults.history_bytes, 160000)
+        self.assertFalse(defaults.enable_tools)
+        self.assertEqual(defaults.session_reuse_mode, "strict")
+        self.assertFalse(defaults.cost_log_enabled)
+        self.assertEqual(defaults.empty_dedupe_ttl, 30)
+        self.assertEqual(defaults.quota_cooldown, 60)
+
+        custom = Settings.from_dict(
+            {
+                "enable_tools": True,
+                "history_bytes": 160000,
+                "session_reuse_mode": "structured",
+                "cost_log_enabled": False,
+                "empty_dedupe_ttl": 0,
+                "quota_cooldown": 300,
+            }
+        )
+        self.assertTrue(custom.enable_tools)
+        self.assertEqual(custom.history_bytes, 160000)
+        self.assertEqual(custom.session_reuse_mode, "structured")
+        self.assertFalse(custom.cost_log_enabled)
+        self.assertEqual(custom.empty_dedupe_ttl, 0)
+        self.assertEqual(custom.quota_cooldown, 300)
+
+        for bad in (
+            {"session_reuse_mode": "auto"},
+            {"cost_log_enabled": "yes"},
+            {"empty_dedupe_ttl": -1},
+            {"empty_dedupe_ttl": 301},
+            {"empty_dedupe_ttl": True},
+            {"quota_cooldown": -1},
+            {"quota_cooldown": 301},
+            {"quota_cooldown": False},
+        ):
+            with self.assertRaises(AgyError):
+                Settings.from_dict(bad)

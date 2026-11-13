@@ -1,12 +1,31 @@
 """Public errors deliberately exclude CLI output, prompts and credentials."""
 
+import math
 import re
 
 
 class AgyError(RuntimeError):
-    def __init__(self, code: str, message: str, *, exit_code: int | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        exit_code: int | None = None,
+        retry_after: int | None = None,
+        origin_turn_id: str | None = None,
+        no_retry: bool = False,
+    ):
         self.code = code
         self.exit_code = exit_code if type(exit_code) is int else None
+        self.retry_after = (
+            retry_after if type(retry_after) is int and retry_after >= 0 else None
+        )
+        self.origin_turn_id = (
+            origin_turn_id
+            if isinstance(origin_turn_id, str) and origin_turn_id
+            else None
+        )
+        self.no_retry = bool(no_retry)
         super().__init__(f"AGY [{code}] {message}")
 
 
@@ -36,7 +55,15 @@ _MESSAGES = {
 }
 
 
-def classified_error(code: str, *, stage: str = "", exit_code: int | None = None) -> AgyError:
+def classified_error(
+    code: str,
+    *,
+    stage: str = "",
+    exit_code: int | None = None,
+    retry_after: int | None = None,
+    origin_turn_id: str | None = None,
+    no_retry: bool = False,
+) -> AgyError:
     """Rebuild an error from an allowlisted code, without upstream text."""
     if code not in _MESSAGES:
         code = "UPSTREAM"
@@ -53,12 +80,38 @@ def classified_error(code: str, *, stage: str = "", exit_code: int | None = None
         else ""
     )
     suffix = f" CLI 退出码：{exit_code}。" if type(exit_code) is int else ""
-    return AgyError(code, prefix + _MESSAGES[code] + suffix, exit_code=exit_code)
+    return AgyError(
+        code,
+        prefix + _MESSAGES[code] + suffix,
+        exit_code=exit_code,
+        retry_after=retry_after,
+        origin_turn_id=origin_turn_id,
+        no_retry=no_retry,
+    )
+
+
+def extract_retry_after(error: object) -> int | None:
+    """Extract only bounded positive numeric retry_after metadata from structured errors."""
+    if not isinstance(error, dict):
+        return None
+    candidates = [error]
+    data = error.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+    for source in candidates:
+        for key in ("retry_after", "retryAfter", "retry_after_seconds"):
+            raw = source.get(key)
+            if type(raw) is int and raw > 0:
+                return min(300, raw)
+            if type(raw) is float and math.isfinite(raw) and raw > 0:
+                return min(300, max(1, math.ceil(raw)))
+    return None
 
 
 def remote_error(error: object) -> AgyError:
     # Inspect transiently for classification; never propagate upstream text.
     # In particular, -32000 is the generic JSON-RPC server-error range, not AUTH.
+    retry_after = extract_retry_after(error)
     text = str(error).lower()
     patterns = (
         (
@@ -115,5 +168,8 @@ def remote_error(error: object) -> AgyError:
     )
     for code, pattern in patterns:
         if re.search(pattern, text):
-            return classified_error(code)
+            return classified_error(
+                code,
+                retry_after=retry_after if code in {"QUOTA", "RATE_LIMIT"} else None,
+            )
     return classified_error("UPSTREAM")

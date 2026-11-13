@@ -1,12 +1,22 @@
 """Offline ACP fixture. Never connects to a service or accesses credentials."""
 
 import json
+import os
 import sys
 import time
 
 scenario = sys.argv[1]
 model = "gemini-test"
 effort = "low"
+prompt_seq = 0
+_test_log = os.environ.get("AGY_TEST_LOG")
+
+
+def record(event, **fields):
+    if not _test_log:
+        return
+    with open(_test_log, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event": event, **fields}) + "\n")
 
 
 def config():
@@ -35,6 +45,16 @@ def config():
     }
 
 
+def active_scenario():
+    path = os.environ.get("AGY_SCENARIO_FILE")
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read().strip()
+        if text:
+            return text
+    return scenario
+
+
 def send(obj):
     print(json.dumps({"jsonrpc": "2.0", **obj}), flush=True)
 
@@ -46,6 +66,7 @@ for line in sys.stdin:
         continue
     result = {}
     if method == "initialize":
+        record("init", argv=sys.argv[1:])
         if scenario in {"startup-exit", "startup-zero", "wrapper-exit", "network-exit"}:
             message = {
                 "startup-exit": "Deployment script stopped FAKE-PRIVATE /private/test",
@@ -72,6 +93,7 @@ for line in sys.stdin:
             },
         }
     elif method == "session/new":
+        record("new")
         if scenario == "post-init-exit":
             raise SystemExit(23)
         if scenario in {"auth", "auth-with-wrapper-warning"}:
@@ -95,7 +117,16 @@ for line in sys.stdin:
             effort = request["params"]["value"]
         result = config()
     elif method == "session/prompt":
-        if scenario == "probe":
+        prompt_seq += 1
+        blocks = request.get("params", {}).get("prompt", [])
+        record(
+            "prompt",
+            seq=prompt_seq,
+            texts=[b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"],
+            block_types=[b.get("type") for b in blocks if isinstance(b, dict)],
+        )
+        cur = active_scenario()
+        if cur == "probe":
             send(
                 {
                     "id": request["id"],
@@ -106,23 +137,149 @@ for line in sys.stdin:
                 }
             )
             continue
-        for kind, text in (
-            ("agent_thought_chunk", "fake reasoning"),
-            ("agent_message_chunk", "fake answer"),
-        ):
+        if cur == "error-with-usage":
             send(
                 {
                     "method": "session/update",
                     "params": {
                         "sessionId": "fake-session",
                         "update": {
-                            "sessionUpdate": kind,
-                            "content": {"type": "text", "text": text},
+                            "sessionUpdate": "usage_update",
+                            "usage": {
+                                "inputTokens": 650,
+                                "cachedReadTokens": 100,
+                                "outputTokens": 5,
+                            },
                         },
                     },
                 }
             )
-        result = {"stopReason": "end_turn"}
+            send(
+                {
+                    "id": request["id"],
+                    "error": {
+                        "code": -32000,
+                        "message": "Upstream service unavailable",
+                        "data": {
+                            "usage": {
+                                "inputTokens": 650,
+                                "cachedReadTokens": 100,
+                                "outputTokens": 5,
+                            }
+                        },
+                    },
+                }
+            )
+            continue
+        if cur == "quota-error":
+            send(
+                {
+                    "id": request["id"],
+                    "error": {
+                        "code": -32000,
+                        "message": "Resource has been exhausted (quota). Retry after 12s.",
+                        "data": {
+                            "retryAfter": 12,
+                            "usage": {"inputTokens": 200, "outputTokens": 0},
+                        },
+                    },
+                }
+            )
+            continue
+        if cur == "empty":
+            send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "fake-session",
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "   \n  "},
+                        },
+                    },
+                }
+            )
+            result = {
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 500, "outputTokens": 0},
+            }
+        elif cur == "usage":
+            send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "fake-session",
+                        "update": {
+                            "sessionUpdate": "usage_update",
+                            "usage": {
+                                "inputTokens": 1000,
+                                "cachedReadTokens": 400,
+                                "outputTokens": 20,
+                            },
+                        },
+                    },
+                }
+            )
+            for kind, text in (
+                ("agent_thought_chunk", "fake reasoning"),
+                ("agent_message_chunk", "fake answer"),
+            ):
+                send(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": "fake-session",
+                            "update": {
+                                "sessionUpdate": kind,
+                                "content": {"type": "text", "text": text},
+                            },
+                        },
+                    }
+                )
+            result = {
+                "stopReason": "end_turn",
+                "usage": {
+                    "inputTokens": 1200,
+                    "cachedReadTokens": 800,
+                    "outputTokens": 42,
+                },
+            }
+        elif cur == "no-cache-usage":
+            send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "fake-session",
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "fake answer"},
+                        },
+                    },
+                }
+            )
+            result = {
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 300, "outputTokens": 15},
+            }
+        else:
+            answer = f"reply:{prompt_seq}" if cur == "echo" else "fake answer"
+            for kind, text in (
+                ("agent_thought_chunk", "fake reasoning"),
+                ("agent_message_chunk", answer),
+            ):
+                send(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": "fake-session",
+                            "update": {
+                                "sessionUpdate": kind,
+                                "content": {"type": "text", "text": text},
+                            },
+                        },
+                    }
+                )
+            result = {"stopReason": "end_turn"}
     else:
         send(
             {

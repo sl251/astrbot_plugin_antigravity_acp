@@ -60,7 +60,21 @@ def _continuation_exchange(messages, baseline, call, text):
 
 class ToolTurn:
     def __init__(
-        self, runtime, request, key, model, effort, snapshot, signal, approver=None
+        self,
+        runtime,
+        request,
+        key,
+        model,
+        effort,
+        snapshot,
+        signal,
+        approver=None,
+        *,
+        meter=None,
+        provider_id="",
+        logical_request_id=None,
+        request_fingerprint=None,
+        claimed_half_open=None,
     ):
         self.runtime, self.request, self.key = runtime, request, key
         self.model, self.effort, self.snapshot, self.signal = (
@@ -69,6 +83,11 @@ class ToolTurn:
             snapshot,
             signal,
         )
+        self.meter = meter
+        self.provider_id = provider_id
+        self.logical_request_id = logical_request_id
+        self.request_fingerprint = request_fingerprint
+        self.claimed_half_open = claimed_half_open
         self.queue = asyncio.Queue(maxsize=128)
         self.resume = asyncio.Event()
         self.waiting = None
@@ -127,8 +146,19 @@ class ToolTurn:
 
     async def _run(self):
         source = self.runtime.stream(
-            self.request, self.key, self.model, self.effort, self.snapshot
+            self.request,
+            self.key,
+            self.model,
+            self.effort,
+            self.snapshot,
+            meter=self.meter,
+            provider_id=self.provider_id,
+            logical_request_id=self.logical_request_id,
+            request_fingerprint=self.request_fingerprint,
+            claimed_half_open=self.claimed_half_open,
         )
+        final_status = "error"
+        final_code = "TOOL_PROTOCOL"
         try:
             async for event in source:
                 if event.kind == "text":
@@ -171,21 +201,31 @@ class ToolTurn:
                     self.segment.clear()
                     self.waiting = None
                 else:
+                    if event.kind == "done":
+                        final_status = "ok"
+                        final_code = None
                     await self._put(event)
         except TimeoutError:
+            final_code = "TOOL_TIMEOUT"
             await self._error(AgyError("TOOL_TIMEOUT", "宿主审批/执行未在期限内回填。"))
         except asyncio.CancelledError:
+            final_status = "cancelled"
+            final_code = "CANCELLED"
             await self._error(
                 AgyError("CANCELLED", "工具轮已取消；已交接调用状态未知。")
             )
         except AgyError as exc:
+            final_code = exc.code
             await self._error(exc)
         except Exception:
+            final_code = "TOOL_PROTOCOL"
             await self._error(AgyError("TOOL_PROTOCOL", "工具轮异常。"))
         finally:
             try:
                 await source.aclose()
             finally:
+                if self.meter is not None:
+                    self.meter.finish(status=final_status, error_code=final_code)
                 self.finished = True
                 self.watcher.cancel()
                 if self.runtime.turns.get(self.key) is self:
@@ -215,8 +255,16 @@ class ToolTurn:
             or effort != self.effort
             or snapshot.fingerprint != self.snapshot.fingerprint
             or request.system_hash != self.request.system_hash
+            or getattr(request, "system_structured", False)
+            != getattr(self.request, "system_structured", False)
+            or getattr(request, "source_revision", None)
+            != getattr(self.request, "source_revision", None)
+            or getattr(request, "transient_hash", "")
+            != getattr(self.request, "transient_hash", "")
         ):
-            raise AgyError("TOOL_CONTEXT", "工具续轮身份、人格、模型或许可发生变化。")
+            raise AgyError(
+                "TOOL_CONTEXT", "工具续轮身份、人格、上下文版本、模型或许可发生变化。"
+            )
         call = self.waiting["call"]
         exchange = _continuation_exchange(
             request.messages, self.request.messages, call, "".join(self.segment)
@@ -274,7 +322,20 @@ class ToolTurn:
 
 
 async def chat_events(
-    runtime, request, key, model, effort, snapshot, signal, approver=None
+    runtime,
+    request,
+    key,
+    model,
+    effort,
+    snapshot,
+    signal,
+    approver=None,
+    *,
+    meter=None,
+    provider_id="",
+    logical_request_id=None,
+    request_fingerprint=None,
+    claimed_half_open=None,
 ):
     """Per-entry lock releases on host handoff; retained job owns original lease."""
     if key in runtime.entry_locks:
@@ -285,7 +346,10 @@ async def chat_events(
         if turn:
             try:
                 turn.accept(request, model, effort, snapshot, signal, approver)
-            except BaseException:
+            except BaseException as exc:
+                if turn.meter is not None:
+                    code = exc.code if isinstance(exc, AgyError) else "TOOL_CONTEXT"
+                    turn.meter.finish(status="error", error_code=code)
                 await turn.close()
                 runtime.turns.pop(key, None)
                 raise
@@ -298,7 +362,19 @@ async def chat_events(
             ):
                 raise AgyError("BUSY", "工具轮队列已满。")
             turn = ToolTurn(
-                runtime, request, key, model, effort, snapshot, signal, approver
+                runtime,
+                request,
+                key,
+                model,
+                effort,
+                snapshot,
+                signal,
+                approver,
+                meter=meter,
+                provider_id=provider_id,
+                logical_request_id=logical_request_id,
+                request_fingerprint=request_fingerprint,
+                claimed_half_open=claimed_half_open,
             )
             runtime.turns[key] = turn
         source = turn.events()

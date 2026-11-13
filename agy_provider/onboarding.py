@@ -104,10 +104,17 @@ class Onboarding:
         for config in list(manager.providers_config):
             merged = manager.get_merged_provider_config(config)
             if merged.get("type") == PROVIDER_TYPE:
+                tools_mode = (merged.get("custom_extra_body") or {}).get(
+                    "agy_tools_mode", "inherit"
+                )
                 rows.append({
                     "id": config.get("id"),
                     "model": merged.get("model") or (merged.get("model_config") or {}).get("model", ""),
                     "enabled": bool(config.get("enable")),
+                    "tools_mode": tools_mode,
+                    "effective_tools": bool(
+                        self.settings.enable_tools and tools_mode != "chat"
+                    ),
                 })
         return rows
 
@@ -120,6 +127,7 @@ class Onboarding:
             "action_error": self.action_error,
             "action_hint": HINTS.get(self.action_error, "操作未完成，请重新检测或查看模型配置。") if self.action_error else "",
             "global_effort": self.settings.thought_level,
+            "global_enable_tools": self.settings.enable_tools,
         }
 
     async def _check(self, model="", effort="default"):
@@ -153,15 +161,20 @@ class Onboarding:
 
         self.job = asyncio.create_task(run(), name="agy:setup-" + operation)
 
-    def start_apply(self, model, effort, use_default):
+    def start_apply(self, model, effort, use_default, tools_mode=None):
         self._available()
         if not isinstance(effort, str) or effort not in {"default", "low", "medium", "high"} or type(use_default) is not bool:
             raise AgyError("CONFIG", "模型档位或切换选项无效。")
+        if tools_mode is not None and (
+            not isinstance(tools_mode, str)
+            or tools_mode not in {"inherit", "chat", "tools"}
+        ):
+            raise AgyError("CONFIG", "工具模式应为 inherit/chat/tools。")
         if model not in {row["id"] for row in self.report.get("models", [])}:
             raise AgyError("MODEL", "请先检测并选择当前目录中的模型。")
-        self._launch("apply", lambda: self._apply(model, effort, use_default))
+        self._launch("apply", lambda: self._apply(model, effort, use_default, tools_mode))
 
-    async def _apply(self, model, effort, use_default):
+    async def _apply(self, model, effort, use_default, tools_mode=None):
         # Always revalidate model and effort before changing host configuration.
         actual_effort = self.settings.thought_level if effort == "default" else effort
         report = await self._check(model, actual_effort)
@@ -169,7 +182,10 @@ class Onboarding:
             raise AgyError(report.get("error_code", "LOCAL"), "配置前检查未通过。")
         # Host create/update persist configuration around awaited reloads.
         # Finish that critical section before plugin shutdown removes adapters.
-        commit = asyncio.create_task(self._save_provider(model, effort, use_default), name="agy:save-provider")
+        commit = asyncio.create_task(
+            self._save_provider(model, effort, use_default, tools_mode),
+            name="agy:save-provider",
+        )
         cancelled = None
         while True:
             try:
@@ -183,17 +199,25 @@ class Onboarding:
         if cancelled:
             raise cancelled
 
-    async def _save_provider(self, model, effort, use_default):
+    async def _save_provider(self, model, effort, use_default, tools_mode=None):
         from astrbot.core.provider.entities import ProviderType
         from .provider import DEFAULT_CONFIG, PROVIDER_TYPE
 
+        target_mode = "chat" if tools_mode is None else tools_mode
+        match_any_mode = tools_mode is None
         manager = self.context.provider_manager
         existing = None
         for candidate in list(manager.providers_config):
             merged = manager.get_merged_provider_config(candidate)
             candidate_model = merged.get("model") or (merged.get("model_config") or {}).get("model", "")
             candidate_effort = (merged.get("custom_extra_body") or {}).get("agy_thought_level", "default")
-            if merged.get("type") == PROVIDER_TYPE and candidate_model == model and candidate_effort == effort:
+            candidate_mode = (merged.get("custom_extra_body") or {}).get("agy_tools_mode", "inherit")
+            if (
+                merged.get("type") == PROVIDER_TYPE
+                and candidate_model == model
+                and candidate_effort == effort
+                and (match_any_mode or candidate_mode == target_mode)
+            ):
                 existing = candidate
                 break
         if existing is not None:
@@ -204,8 +228,14 @@ class Onboarding:
             config = deepcopy(existing)
             config["enable"] = True
             await manager.update_provider(provider_id, config)
+            effective_mode = (config.get("custom_extra_body") or {}).get("agy_tools_mode", "inherit")
         else:
-            suffix = hashlib.sha256((model + "\0" + effort).encode()).hexdigest()[:12]
+            suffix_seed = (
+                f"{model}\0{effort}"
+                if target_mode == "chat"
+                else f"{model}\0{effort}\0{target_mode}"
+            )
+            suffix = hashlib.sha256(suffix_seed.encode()).hexdigest()[:12]
             base_id = "agy_setup_" + suffix
             provider_id = base_id
             occupied = {row.get("id") for row in manager.providers_config}
@@ -216,14 +246,21 @@ class Onboarding:
             config = deepcopy(DEFAULT_CONFIG)
             config.update(id=provider_id, model=model, enable=True)
             config["custom_extra_body"]["agy_thought_level"] = effort
-            if self.settings.enable_tools:
+            config["custom_extra_body"]["agy_tools_mode"] = target_mode
+            if self.settings.enable_tools and target_mode != "chat":
                 config["modalities"].append("tool_use")
             if self.settings.enable_images:
                 config["modalities"].append("image")
             await manager.create_provider(config)
+            effective_mode = target_mode
         # Host methods persist the provider and selected default; no second
         # plugin state file can get out of sync after a restart.
-        self.result = {"provider_id": provider_id, "model": model, "default_selected": False}
+        self.result = {
+            "provider_id": provider_id,
+            "model": model,
+            "tools_mode": effective_mode,
+            "default_selected": False,
+        }
         if use_default:
             await manager.set_provider(provider_id, ProviderType.CHAT_COMPLETION)
             self.result["default_selected"] = True
@@ -277,7 +314,12 @@ class Onboarding:
                 elif action == "login-cancel":
                     await self.login.cancel(request.username, data.get("ticket", ""))
                 elif action == "apply":
-                    self.start_apply(model, data.get("effort", "default"), data.get("use_default", False))
+                    self.start_apply(
+                        model,
+                        data.get("effort", "default"),
+                        data.get("use_default", False),
+                        data.get("tools_mode"),
+                    )
             return json_response(self.snapshot(request.username), headers=headers)
         except AgyError as exc:
             return error_response(str(exc), status_code=409 if exc.code == "BUSY" else 400, headers=headers)

@@ -1,5 +1,20 @@
 # 变更记录
 
+## 0.5.0
+
+- **A 安全会话复用**：
+  - 新增 `session_reuse_mode`（`strict` | `structured`，默认 `strict`），保持 `history_bytes: 160000`、`enable_tools: false` 向后兼容默认值不变。
+  - 引入 `PromptContext` / `prepare_context`（`stable_system` 与 `transient_data` 分层）；仅当配置为 `structured` 且宿主提供经校验的可信 `agy_context_parts` 时拆分瞬态块（以 `<agy_context_data>` 注入用户轮次消息），未提供或校验失败时自动退回 `strict` 严格整段比较，支持 `clear` 清空与 `retract` 强制重建。
+  - 新增双账本（`host_expected` 与 `sent_window` 分离）、`compare_history`（`exact` / `host_trim` / `rewrite` / `append_gap` / `unknown`）与 `decide_reuse` / `classify_rebuild` 细粒度重建原因判定（含淘汰/退出 tombstone 记录）；工具续轮冻结 `source_revision` 与 `transient_hash`；`ToolSnapshot` 在发布与指纹计算前按 wire 名称排序。
+- **C 聊天 / 工具分流**：
+  - 支持提供商配置 `custom_extra_body.agy_tools_mode`（`inherit` | `chat` | `tools`，默认 `inherit`）与 WebUI「首次设置」实例角色选择（默认推荐 `chat`）。
+  - `chat` 模式绝不下发工具、走精简自定义代理（`--agent astrbot-chat`，`tools: []` + `excludeDefaultComponents: true`），并拒绝工具续轮（`TOOLS_DISABLED`）；`tools` 模式仍严格受插件总闸 `enable_tools` 与 `tool_choice=none` 约束，不可越权绕过。
+- **D 可观测性与 `/agy cost`**：
+  - 新增 `agy_provider/telemetry.py`：`cost_log_enabled`（默认 `false`，避免刷日志）开启后，每个完整 ACP 轮在 `INFO` 级别输出一行脱敏 JSON（`event="agy.turn"`），记录 `input_other` / `input_cached` / `output`、`reused`、`rebuild_reasons`、`primary_reason`、`history_relation`、`usage_status`、`usage_source`、`cache_fields_present` 及字节指标；失败或取消前也会尽力保留最后一次观测到的 usage；无 usage 时输出 `null` 与 `unavailable`；使用 HMAC 对会话/底层会话标识脱敏，绝不输出提示词、正文、用户 ID 或凭据。
+  - 新增只读管理员命令 `/agy cost`（不发起任何模型/探针请求），按实例汇总最近 100 轮缓存命中、复用率、失败消耗、不可用占比与主要重建原因，以及进程池水位和有效配置。
+- **E 失败防重放与短期冷却**：
+  - 新增 `agy_provider/failure_guard.py`：同会话/请求指纹的 `EMPTY` 响应默认 `empty_dedupe_ttl=30` 秒内短期抑制；按 `(provider_id, model)` 维度实施 `QUOTA` 冷却（默认 `quota_cooldown=60` 秒，支持从上游 `retry_after` 结构化提取并封顶 `300` 秒）及单一并发 half-open 探针恢复；只缓存失败标记（从不缓存成功正文），工具续轮与缺少身份标识的匿名请求不参与跨请求误抑制。
+
 ## 0.4.3
 
 - 修复上游 Antigravity CLI 容量不足（`503 UNAVAILABLE: No capacity available`）时，CLI 的重试告警被当作助手正文发给用户的问题：新增 `strip_upstream_capacity_notices`，过滤 `⚠ API error (attempt N)` 告警行、保留真实回答。

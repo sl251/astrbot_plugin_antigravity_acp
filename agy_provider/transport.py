@@ -85,6 +85,8 @@ class AcpClient:
         self.stage = "idle"
         self.diagnostic_epoch = 0
         self.stderr_diagnostics = deque(maxlen=32)
+        self.latest_usage: dict | None = None
+        self.latest_usage_source: str | None = None
 
     @property
     def alive(self) -> bool:
@@ -110,7 +112,7 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.4.2"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.5.0"},
                 },
                 self.settings.startup_timeout,
             )
@@ -287,6 +289,7 @@ class AcpClient:
                     elif obj["method"] in {"session/error", "session/agent_error"}:
                         params = obj.get("params")
                         if self._current_update(params):
+                            self._record_usage(params, "acp_error")
                             raise remote_error(params.get("error", params))
                 else:
                     request_id = obj.get("id")
@@ -295,10 +298,12 @@ class AcpClient:
                     future = self.pending.get(request_id)
                     if future and not future.done():
                         if "error" in obj:
+                            self._record_usage_from_error(obj)
                             future.set_exception(
                                 self._diagnose(remote_error(obj["error"]))
                             )
                         else:
+                            self._record_usage(obj.get("result"), "acp_terminal")
                             future.set_result(obj.get("result"))
                 # readline() may complete synchronously for a whole buffered
                 # burst. Give generate() and cancellation/control tasks a turn
@@ -356,6 +361,27 @@ class AcpClient:
             }
         await self._write(reply)
 
+    def _record_usage(self, payload: object, source: str) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        raw = payload.get("usage")
+        if not isinstance(raw, dict):
+            return False
+        if self.latest_usage is not None and self.latest_usage_source == "acp_terminal" and source != "acp_terminal":
+            return False
+        self.latest_usage = dict(raw)
+        self.latest_usage_source = source
+        return True
+
+    def _record_usage_from_error(self, obj: dict) -> None:
+        if self._record_usage(obj, "acp_error"):
+            return
+        err = obj.get("error")
+        if isinstance(err, dict):
+            if self._record_usage(err, "acp_error"):
+                return
+            self._record_usage(err.get("data"), "acp_error")
+
     def _current_update(self, params: object) -> bool:
         return (
             isinstance(params, dict)
@@ -369,6 +395,13 @@ class AcpClient:
         update = params.get("update", {})
         if not isinstance(update, dict):
             return
+        if self._record_usage(update, "acp_update") or self._record_usage(params, "acp_update"):
+            try:
+                self.events.put_nowait(
+                    Event("usage", result={"usage": self.latest_usage, "source": "acp_update"})
+                )
+            except asyncio.QueueFull:
+                pass
         kind = update.get("sessionUpdate")
         if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
             raise remote_error(update.get("error", update))
@@ -418,6 +451,8 @@ class AcpClient:
         self.text_guard = _AgentTextGuard()
         self.active = True
         self.prompt_terminal = False
+        self.latest_usage = None
+        self.latest_usage_source = None
         self.prompt_deadline = (
             asyncio.get_running_loop().time() + self.settings.request_timeout
         )
@@ -466,7 +501,13 @@ class AcpClient:
                     continue
                 if response.done():
                     result = await response
+                    if self._record_usage(result, "acp_terminal"):
+                        yield Event(
+                            "usage",
+                            result={"usage": self.latest_usage, "source": "acp_terminal"},
+                        )
                     if result.get("error") is not None:
+                        self._record_usage(result.get("error"), "acp_error")
                         raise self._diagnose(remote_error(result["error"]))
                     if result.get("stopReason") in {
                         "error",

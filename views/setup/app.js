@@ -109,6 +109,8 @@ function render(data) {
   }
   $("model").disabled = busy || !models.length;
   $("effort").disabled = busy || !passed || !selected;
+  if (!$("tools-mode").value) $("tools-mode").value = "chat";
+  $("tools-mode").disabled = busy || !passed || !selected;
   $("apply").disabled = busy || !passed || !selected;
   $("use-default").disabled = busy;
   badge("model-badge", models.length ? `${models.length} 个模型` : "等待登录", passed ? "ready" : "");
@@ -121,7 +123,7 @@ function render(data) {
   if (providerSignature !== providerKey) {
     $("configured").replaceChildren(...configured.map(row => {
       const wrapper = document.createElement("div");wrapper.className = "provider";
-      const title = document.createElement("strong");title.textContent = `${row.model} · ${row.enabled ? "已启用" : "已停用"}`;
+      const title = document.createElement("strong");title.textContent = `${row.model} · ${row.tools_mode || "inherit"} · ${row.enabled ? "已启用" : "已停用"}`;
       const line = document.createElement("div");line.className = "copy-row";
       const input = document.createElement("input");input.readOnly = true;input.value = `/agy use ${row.id}`;input.setAttribute("aria-label", "切换模型命令");
       const button = document.createElement("button");button.type = "button";button.className = "btn btn-sm";button.textContent = "复制命令";button.addEventListener("click", () => copy(input));
@@ -163,7 +165,12 @@ $("model").onchange = () => {
 };
 $("model-form").onsubmit = event => {
   event.preventDefault();
-  action("apply", {model: $("model").value, effort: $("effort").value, use_default: $("use-default").checked});
+  action("apply", {
+    model: $("model").value,
+    effort: $("effort").value,
+    tools_mode: $("tools-mode").value || "chat",
+    use_default: $("use-default").checked,
+  });
 };
 
 async function poll() {

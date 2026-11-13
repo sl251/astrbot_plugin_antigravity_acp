@@ -303,12 +303,12 @@ class ToolSnapshot:
                     "inputSchema": schema,
                 }
             )
-        if (
-            len(self.tools) > 128
-            or len(json.dumps(self.tools).encode()) > FRAME_LIMIT // 2
-        ):
+        self.tools.sort(key=lambda item: item["name"])
+        encoded_tools = json.dumps(self.tools, ensure_ascii=False).encode()
+        if len(self.tools) > 128 or len(encoded_tools) > FRAME_LIMIT // 2:
             raise AgyError("TOOL_SCHEMA", "工具集超过预算。")
-        self.fingerprint = digest(self.tools)
+        self.schema_bytes = len(encoded_tools) if self.tools else 0
+        self.fingerprint = digest(self.tools) if self.tools else ""
 
     def notification_name(self, name):
         prefix = f"mcp_{SERVER_NAME}_"

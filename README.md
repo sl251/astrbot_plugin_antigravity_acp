@@ -7,7 +7,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
-![Status](https://img.shields.io/badge/Status-Active%20(v0.4.2)-brightgreen)
+![Status](https://img.shields.io/badge/Status-Active%20(v0.5.0)-brightgreen)
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
@@ -105,6 +105,9 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
   这两个功能默认关闭。如果需要开启：
   1. 先在 **插件配置** 中开启 `enable_tools` 或 `enable_images`，保存并重载插件；
   2. 再去 AstrBot 的 **模型 / 提供商配置** 中，为对应模型勾选 `tool_use` 或 `image` 能力。两边同时开启才会生效。
+  3. 从 `v0.5.0` 起建议通过提供商 `custom_extra_body.agy_tools_mode`（`chat` / `tools` / `inherit`）或在「首次设置」中选择模型角色做聊天/工具分流：纯聊天用 `chat`（绝不注入工具 schema，走精简 `astrbot-chat` 代理），需要工具的会话用 `tools`（仍受插件总闸 `enable_tools` 控制）。
+- **只读诊断与成本统计**：
+  管理员可执行 `/agy doctor` 进行无生成连通自检，或执行 `/agy cost` 查看各实例只读缓存复用、Token 统计与进程池摘要（不发送任何模型请求）。
 - **关于连通测试与额度**：
   插件「首次设置」里的检测、登录、拉取模型列表均不消耗对话额度。但 AstrBot 模型页自带的“连通测试”会实际发送一条测试消息，消耗少量额度；另外，模型保存成功仅代表协议握手通过，实际能否对话仍取决于账号自身是否有剩余额度。
 
@@ -114,7 +117,9 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
-- **v0.4.2 (当前版本)**：调整了启动策略，把环境预检放到后台静默执行，没装 `agy` 也不会卡住 AstrBot 启动了；清理了内部状态同步的冗余代码。
+- **v0.5.0 (当前版本)**：增强长会话与稳定性能力——安全会话复用（`strict` 默认 + 可选 `structured` 上下文分层、双账本与重建归因）、聊天/工具实例分流（`agy_tools_mode` + 精简 `astrbot-chat` 代理）、结构化轮次遥测 JSON 与只读 `/agy cost` 统计、以及 `EMPTY` 抑制 / `QUOTA` 冷却熔断。
+- **v0.4.3**：过滤上游 CLI 容量不足时输出的 `503 UNAVAILABLE` 告警行，纯告警轮次转为 `QUOTA` 交给 AstrBot fallback。
+- **v0.4.2**：调整了启动策略，把环境预检放到后台静默执行，没装 `agy` 也不会卡住 AstrBot 启动了；清理了内部状态同步的冗余代码。
 - **v0.4.1**：修了一波细节，去掉了没用的配置项，支持直接粘贴完整的 localhost 回调链接完成登录。
 - **v0.4.0**：仓库正式改名为 `astrbot_plugin_antigravity_acp`；新增了 WebUI「首次设置」页面，登录、拉模型列表、调思考档位终于不用手搓配置文件了。
 - **v0.3.x**：把 `agy` 自带的本地文件和终端工具权限彻底锁死；补上了发图识图支持（加了防 SSRF 和尺寸限制）；重构了进程池，解决了异常退出时留僵尸进程的问题。
@@ -135,7 +140,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 ## 1. System Identity & Core Invariants (核心契约与安全边界)
 
-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.4.2`)
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.5.0`)
 - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
 - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
 - **Compliance & Security Invariants (DO NOT VIOLATE)**:
@@ -155,7 +160,9 @@ flowchart LR
 ```
 
 - **Session Binding Key**: `(provider_instance_id, astrbot_session_id, conversation_id)`.
-- **History Prefix Matching**: Reuses the live `agy acp` session if the message history prefix matches. If context compression, message editing, persona switching, or process eviction occurs, the session is rebuilt using AstrBot's authoritative history formatted as a role-tagged JSON transcript.
+- **History Prefix Matching & Dual-Ledger Reuse**: Maintains separated `host_expected` and `sent_window` ledgers with `compare_history` (`exact` / `host_trim` / `rewrite` / `append_gap` / `unknown`). Defaults to `session_reuse_mode = "strict"`; when configured to `"structured"` and the host supplies validated `agy_context_parts`, transient data is attached to user turns instead of invalidating the live system prompt (otherwise falls back to strict comparison).
+- **Chat / Tools Split (`agy_tools_mode`)**: Provider `custom_extra_body.agy_tools_mode` accepts `"inherit"` (default), `"chat"`, or `"tools"`. `"chat"` always binds `--agent astrbot-chat` (`tools: []`, `excludeDefaultComponents: true`) and rejects tool history (`TOOLS_DISABLED`). `"tools"` cannot bypass plugin master `enable_tools = false` or `tool_choice = "none"`.
+- **Observability & Failure Guard**: Emits one HMAC-anonymized JSON telemetry line (`event: "agy.turn"`, INFO level) per ACP turn and supports read-only `/agy cost`. Short-term guards deduplicate identical `EMPTY` requests (`empty_dedupe_ttl`, default 30s) and enforce per-`(provider_id, model)` `QUOTA` cooldowns (`quota_cooldown`, default 60s, capped at 300s) with single half-open probe recovery; never caches successful responses.
 - **Host Tool Bridge (`mcp_bridge.py`)**: When `enable_tools=true`, host tools (`FunctionTool`, `MCPTool`, `HandoffTool`, and direct-send plugins like TTS returning `None`) are exposed to `agy acp` via a local Unix Socket MCP server. Automatically adapts AstrBot `skills_like` mode to `full` mode.
 - **Process Pool & Cleanup**: Intra-session requests are serialized; cross-session requests run in parallel up to `max_concurrency`. Idle sessions are reaped via LRU pool. Process trees are terminated via process groups on Linux/macOS and `taskkill /T` on Windows.
 

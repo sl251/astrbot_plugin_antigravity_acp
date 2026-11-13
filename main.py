@@ -19,8 +19,10 @@ from .agy_provider.provider import (
     PROVIDER_TYPE,
     AgyProvider,
     configure,
+    instance_cost_snapshots,
     terminate_all,
 )
+from .agy_provider.telemetry import format_cost_report
 
 RESTORE_IDS = "_sl251_agy_provider_restore_ids"
 
@@ -41,7 +43,7 @@ def unregister_owned_adapter() -> None:
     "astrbot_plugin_antigravity_acp",
     "sl251",
     "通过本机 AGY ACP 使用 Gemini 模型",
-    "0.4.2",
+    "0.5.0",
     "https://github.com/sl251/astrbot_plugin_antigravity_acp",
 )
 class AgyProviderPlugin(Star):
@@ -72,9 +74,10 @@ class AgyProviderPlugin(Star):
         message += "检测或登录正在进行。" if busy else next_step(service.report)
         if rows := service.providers():
             message += "\n已配置模型：\n" + "\n".join(
-                f"{row['id']} · {row['model']}" for row in rows
+                f"{row['id']} · {row['model']} · mode={row.get('tools_mode', 'inherit')}"
+                for row in rows
             )
-            message += "\n在本会话使用：/agy use <提供商 ID>"
+            message += "\n在本会话使用：/agy use <提供商 ID>（建议纯聊天优先用 chat 实例，工具会话用 tools 实例；统计：/agy cost）"
         yield event.plain_result(message)
 
     @agy.command("use")
@@ -96,11 +99,42 @@ class AgyProviderPlugin(Star):
             await self.context.provider_manager.set_provider(
                 provider_id, ProviderType.CHAT_COMPLETION, event.unified_msg_origin
             )
-            yield event.plain_result(f"当前会话已切换到 {provider_id}，可以开始聊天。")
+            chosen = next(
+                (row for row in service.providers() if row["id"] == provider_id), {}
+            )
+            mode = chosen.get("tools_mode", "inherit")
+            yield event.plain_result(
+                f"当前会话已切换到 {provider_id}（agy_tools_mode={mode}），可以开始聊天。"
+            )
         except AgyError as exc:
             yield event.plain_result(str(exc))
         except Exception:
             yield event.plain_result("AGY 模型切换失败，请检查模型是否已启用，或重新运行首次设置。")
+
+    @agy.command("cost")
+    @filter.permission_type(filter.PermissionType.ADMIN, raise_error=False)
+    async def cost(self, event: AstrMessageEvent):
+        if not event.is_admin():
+            return
+        if self.stopping:
+            yield event.plain_result("AGY [CLOSED] 插件正在停用，无法读取成本统计。")
+            return
+        settings = (
+            self.setup_service.settings
+            if self.setup_service is not None
+            else Settings.from_dict(self.config)
+        )
+        settings_summary = {
+            "session_reuse_mode": settings.session_reuse_mode,
+            "history_bytes": settings.history_bytes,
+            "enable_tools": settings.enable_tools,
+            "cost_log_enabled": settings.cost_log_enabled,
+            "empty_dedupe_ttl": settings.empty_dedupe_ttl,
+            "quota_cooldown": settings.quota_cooldown,
+        }
+        yield event.plain_result(
+            format_cost_report(instance_cost_snapshots(), settings_summary)
+        )
 
     @agy.command("doctor")
     @filter.permission_type(filter.PermissionType.ADMIN, raise_error=False)
@@ -148,7 +182,7 @@ class AgyProviderPlugin(Star):
             template["modalities"].append("image")
         registry.register_provider_adapter(
             PROVIDER_TYPE,
-            "本机官方 AGY CLI / ACP Gemini 模型（工具/图片按插件开关启用）",
+            "本机官方 AGY CLI / ACP Gemini 模型（支持 custom_extra_body.agy_tools_mode=inherit|chat|tools）",
             default_config_tmpl=template,
             provider_display_name="AGY Gemini (ACP)",
         )(AgyProvider)

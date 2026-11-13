@@ -97,7 +97,36 @@
   "enable_tools": {
     "description": "启用宿主工具桥（需完整工具 schema 与宿主会话）",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "总闸；非空工具集会启用默认 agent，实测底座明显高于纯聊天。"
+  },
+  "session_reuse_mode": {
+    "description": "会话复用模式",
+    "type": "string",
+    "default": "strict",
+    "options": [
+      "strict",
+      "structured"
+    ],
+    "hint": "structured 仅用于已接入可信上下文分层的宿主；未知 system 变化仍重建，禁止忽略人格与权限变化。"
+  },
+  "cost_log_enabled": {
+    "description": "记录每轮成本与重建原因",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭以免刷日志；开启后每轮输出一行脱敏 JSON。随时可用 /agy cost 查看最近汇总。"
+  },
+  "empty_dedupe_ttl": {
+    "description": "EMPTY 相同请求抑制秒数",
+    "type": "int",
+    "default": 30,
+    "hint": "范围 0–300；0 关闭；不缓存成功答案，不退款，工具副作用不重放。"
+  },
+  "quota_cooldown": {
+    "description": "额度/容量错误冷却秒数",
+    "type": "int",
+    "default": 60,
+    "hint": "范围 0–300；0 关闭；不缓存成功答案，不退款，工具副作用不重放。"
   },
   "enable_images": {
     "description": "启用 PNG/JPEG 图片输入",

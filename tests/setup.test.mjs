@@ -174,3 +174,17 @@ test("model change resets thought effort and requests fresh catalog", async () =
   assert.equal(ui.requests[0].body.model, "gemini-test");
   assert.equal(ui.get("effort").value, "default");
 });
+
+test("model save sends selected tools_mode with chat default", async () => {
+  const ui = await boot();
+  assert.equal(ui.get("tools-mode").value, "chat");
+  ui.get("model-form").onsubmit({preventDefault() {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.requests[0].endpoint, "setup/apply");
+  assert.equal(ui.requests[0].body.tools_mode, "chat");
+
+  ui.get("tools-mode").value = "tools";
+  ui.get("model-form").onsubmit({preventDefault() {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.requests[1].body.tools_mode, "tools");
+});
