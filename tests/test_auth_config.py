@@ -203,7 +203,7 @@ class ConfigTests(unittest.TestCase):
             for key, item in schema.items()
             if item.get("type") == "int"
         }
-        self.assertEqual(len(sliders), 18)
+        self.assertEqual(len(sliders), 20)
         for key, slider in sliders.items():
             low, high = slider["min"], slider["max"]
             base = {"max_sessions": 16} if key == "max_concurrent" else {}

@@ -171,13 +171,23 @@
     "description": "EMPTY 相同请求抑制秒数",
     "type": "int",
     "default": 30,
-    "hint": "范围 0–300；0 关闭；不缓存成功答案，不退款，工具副作用不重放。"
+    "hint": "合法整数范围 0–300；非法数值在加载时恢复为默认值并告警。",
+    "slider": {
+      "min": 0,
+      "max": 300,
+      "step": 1
+    }
   },
   "quota_cooldown": {
     "description": "额度/容量错误冷却秒数",
     "type": "int",
     "default": 60,
-    "hint": "范围 0–300；0 关闭；不缓存成功答案，不退款，工具副作用不重放。"
+    "hint": "合法整数范围 0–300；非法数值在加载时恢复为默认值并告警。",
+    "slider": {
+      "min": 0,
+      "max": 300,
+      "step": 1
+    }
   },
   "enable_images": {
     "description": "启用 PNG/JPEG 图片输入",
