@@ -7,7 +7,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
-![Status](https://img.shields.io/badge/Status-Active%20(v0.5.0)-brightgreen)
+![Status](https://img.shields.io/badge/Status-Active%20(v0.5.1)-brightgreen)
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
