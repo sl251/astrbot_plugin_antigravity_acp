@@ -108,11 +108,19 @@ def extract_retry_after(error: object) -> int | None:
     return None
 
 
-def remote_error(error: object) -> AgyError:
+def remote_error(error: object, *, retry_notice: bool = False) -> AgyError:
     # Inspect transiently for classification; never propagate upstream text.
     # In particular, -32000 is the generic JSON-RPC server-error range, not AUTH.
     retry_after = extract_retry_after(error)
     text = str(error).lower()
+    # Relax bare EOF matching only inside bounded retry-notice diagnostics (and
+    # explicit ": EOF" Go net/http error tails) so unrelated phrases like
+    # "nonunexpected eof" in generic RPC/stderr text stay UPSTREAM.
+    eof_pattern = (
+        r"\b(?:unexpected[\s_-]+)?eof\b"
+        if retry_notice
+        else r"\bunexpected[\s_-]+eof\b|:\s*eof\b"
+    )
     patterns = (
         (
             "CLI_WRAPPER",
@@ -155,7 +163,9 @@ def remote_error(error: object) -> AgyError:
             r"enotfound|eai_again|econnrefused|econnreset|enetunreach|ehostunreach|"
             r"connection.(?:refused|reset)|network.(?:unreachable|error)|"
             r"getaddrinfo[\s:_-]+(?:failed|failure|error)|"
-            r"name.or.service.not.known|failed.to.fetch|fetch.failed",
+            r"name.or.service.not.known|failed.to.fetch|fetch.failed|"
+            r"the stream was interrupted\. please continue|"
+            + eof_pattern,
         ),
         (
             "AUTH",
@@ -167,7 +177,7 @@ def remote_error(error: object) -> AgyError:
         ("UNSUPPORTED", r"-32601|method.not.found|not.supported"),
     )
     for code, pattern in patterns:
-        if re.search(pattern, text):
+        if re.search(pattern, text, re.IGNORECASE):
             return classified_error(
                 code,
                 retry_after=retry_after if code in {"QUOTA", "RATE_LIMIT"} else None,

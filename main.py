@@ -12,7 +12,7 @@ from astrbot.core.provider import register as registry
 from .agy_provider.config import Settings
 from .agy_provider.errors import AgyError
 from .agy_provider.host_compat import install_host_compat, uninstall_host_compat
-from .agy_provider.onboarding import Onboarding, next_step
+from .agy_provider.onboarding import Onboarding, ensure_provider_source, next_step
 from .agy_provider.provider import (
     DEFAULT_CONFIG,
     OWNER,
@@ -172,7 +172,17 @@ class AgyProviderPlugin(Star):
         )
 
     async def initialize(self):
-        settings = Settings.from_dict(self.config)
+        repairs = {}
+        settings = Settings.from_dict(self.config, on_repair=repairs.__setitem__)
+        if repairs:
+            self.config.update(repairs)
+            for key, value in repairs.items():
+                logger.warning("AGY 配置 %s 无效或与其他预算冲突，已恢复为 %s。", key, value)
+            try:
+                if hasattr(self.config, "save_config"):
+                    self.config.save_config()
+            except Exception:
+                logger.warning("AGY 修正配置写盘失败；本次使用修正值，请在插件配置页重新保存。")
         configure(settings)
         unregister_owned_adapter()
         template = deepcopy(DEFAULT_CONFIG)
@@ -194,6 +204,11 @@ class AgyProviderPlugin(Star):
             self.registered = False
             raise
         manager = self.context.provider_manager
+        if any(config.get("type") == PROVIDER_TYPE for config in manager.providers_config):
+            try:
+                await ensure_provider_source(manager)
+            except Exception:
+                logger.warning("AGY 模型来源关联保存失败；已有模型仍可使用，请在插件面板重新保存模型。")
         # Startup: ProviderManager.initialize follows plugin initialization.
         # Hot reload / re-enable: restore only instances this plugin removed.
         restore_ids = getattr(manager, RESTORE_IDS, set())

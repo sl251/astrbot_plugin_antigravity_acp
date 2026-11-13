@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Settings
 from .errors import AgyError, classified_error, remote_error
-from .notices import TerminalNoticeGuard
+from .notices import RetryNoticeGuard, TerminalNoticeGuard
 from .process import build_child_env, spawn, stop_process
 
 
@@ -34,8 +34,10 @@ class _AgentTextGuard:
         self.pending = ""
         self.line_start = True
         self.notices = TerminalNoticeGuard()
+        self.retries = RetryNoticeGuard()
 
     def feed(self, text: str, *, final=False) -> str:
+        text = self.retries.feed(text, final=final)
         text = self.pending + self.notices.feed(text, final=final)
         self.pending = ""
         output = []
@@ -44,7 +46,8 @@ class _AgentTextGuard:
             if self.line_start:
                 candidate = line.strip()
                 if candidate in self.markers and (newline or final):
-                    raise AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
+                    code = self.retries.error_code or "UPSTREAM"
+                    raise AgyError(code, "AGY agent 执行失败，请检查官方 CLI。")
                 possible = any(
                     marker.startswith(line.lstrip()) or (candidate == marker)
                     for marker in self.markers
@@ -517,12 +520,15 @@ class AcpClient:
                         "execution_error",
                         "internal_error",
                     }:
+                        code = self.text_guard.retries.error_code or "UPSTREAM"
                         raise self._diagnose(
-                            AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
+                            AgyError(code, "AGY agent 执行失败，请检查官方 CLI。")
                         )
                     remaining = self.text_guard.feed("", final=True)
                     if remaining:
                         yield Event("text", remaining)
+                    if self.text_guard.retries.error_code:
+                        result = dict(result, agy_retry_error=self.text_guard.retries.error_code)
                     completed = True
                     yield Event("done", result=result)
                     return

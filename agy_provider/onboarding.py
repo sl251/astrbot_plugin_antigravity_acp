@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 import os
 import platform
 import secrets
@@ -12,6 +13,11 @@ from .errors import AgyError
 from .login import LoginFlow
 from .paths import plugin_data_root
 from .probe import probe
+
+try:
+    from astrbot.api import logger
+except ImportError:
+    logger = logging.getLogger(__name__)
 
 
 PLUGIN_NAME = "astrbot_plugin_antigravity_acp"
@@ -70,6 +76,97 @@ def environment(settings=None):
             "Linux / macOS：按官方 CLI 安装指引操作。自动搜索 PATH 和 ~/.local/bin/agy；系统服务须使用同一运行用户。"
         ),
     }
+
+
+async def ensure_provider_source(manager):
+    """Persist the source relationship required by AstrBot 4.29's model page.
+
+    ProviderManager has no source-creation method. Use its configuration and
+    resource lock, as its create/update methods do. Existing model IDs and
+    per-model settings remain unchanged, so session selections remain valid.
+    Old hosts lacking resource_lock or provider_sources structure skip binding
+    with a warning so wizard saves can proceed.
+    """
+    from .provider import PROVIDER_TYPE
+
+    lock = getattr(manager, "resource_lock", None)
+    acm = getattr(manager, "acm", None)
+    config = getattr(acm, "default_conf", None)
+    if (
+        lock is None
+        or not hasattr(lock, "__aenter__")
+        or not hasattr(lock, "__aexit__")
+        or config is None
+        or not hasattr(config, "get")
+        or not hasattr(config, "__getitem__")
+        or not callable(getattr(config, "save_config", None))
+    ):
+        logger.warning(
+            "当前 AstrBot 宿主缺少 provider_sources 或 resource_lock 接口，已跳过模型来源绑定。"
+        )
+        return None
+
+    async with lock:
+        providers = config.get("provider")
+        sources = config.get("provider_sources")
+        if not isinstance(providers, list) or not isinstance(sources, list):
+            logger.warning(
+                "当前 AstrBot 宿主配置缺少 provider/provider_sources 结构，已跳过模型来源绑定。"
+            )
+            return None
+        source = next(
+            (
+                row
+                for row in sources
+                if isinstance(row, dict)
+                and row.get("id")
+                and row.get("type") == PROVIDER_TYPE
+                and row.get("provider_type") == "chat_completion"
+            ),
+            None,
+        )
+        created = source is None
+        if created:
+            occupied = {row.get("id") for row in sources if isinstance(row, dict)}
+            source_id = PROVIDER_TYPE
+            index = 2
+            while source_id in occupied:
+                source_id = f"{PROVIDER_TYPE}_{index}"
+                index += 1
+            source = {
+                "id": source_id, "type": PROVIDER_TYPE,
+                "provider": PROVIDER_TYPE, "provider_type": "chat_completion",
+                "enable": True, "key": [""],
+            }
+            sources.append(source)
+        source_ids = {
+            row.get("id") for row in sources if isinstance(row, dict) and row.get("id")
+        }
+        changed = []
+        for provider in providers:
+            if (
+                isinstance(provider, dict)
+                and provider.get("type") == PROVIDER_TYPE
+                and provider.get("provider_source_id") not in source_ids
+            ):
+                changed.append((provider, "provider_source_id" in provider,
+                                provider.get("provider_source_id")))
+                provider["provider_source_id"] = source["id"]
+        try:
+            # Re-persist on explicit save even after a previous write failed.
+            config.save_config()
+        except BaseException:
+            for provider, present, previous in changed:
+                if present:
+                    provider["provider_source_id"] = previous
+                else:
+                    provider.pop("provider_source_id", None)
+            if created:
+                sources.remove(source)
+            raise
+        manager.provider_sources_config = sources
+        manager.providers_config = providers
+        return source["id"]
 
 
 class Onboarding:
@@ -206,6 +303,7 @@ class Onboarding:
         target_mode = "chat" if tools_mode is None else tools_mode
         match_any_mode = tools_mode is None
         manager = self.context.provider_manager
+        source_id = await ensure_provider_source(manager)
         existing = None
         for candidate in list(manager.providers_config):
             merged = manager.get_merged_provider_config(candidate)
@@ -245,6 +343,8 @@ class Onboarding:
                 index += 1
             config = deepcopy(DEFAULT_CONFIG)
             config.update(id=provider_id, model=model, enable=True)
+            if source_id:
+                config["provider_source_id"] = source_id
             config["custom_extra_body"]["agy_thought_level"] = effort
             config["custom_extra_body"]["agy_tools_mode"] = target_mode
             if self.settings.enable_tools and target_mode != "chat":
