@@ -1,6 +1,8 @@
 """Bounded native process pool; AstrBot history is the source of truth."""
 
 import asyncio
+import logging
+import re
 import shutil
 import time
 import uuid
@@ -16,6 +18,56 @@ from .models import catalog, select
 from .process import LaunchInfo, discover, launch_args, make_home
 from .tools import ToolBroker, ToolSnapshot
 from .transport import AcpClient, Event
+
+try:
+    from astrbot.api import logger
+except ImportError:
+    logger = logging.getLogger(__name__)
+
+_UPSTREAM_CAPACITY_NOTICE_RE = re.compile(
+    r"^⚠\ufe0f?\s+API error \(attempt \d+\): UNAVAILABLE \(code 503\): "
+    r"No capacity available for model \S+ on the server$"
+)
+
+
+def strip_upstream_capacity_notices(text: str) -> tuple[str, int]:
+    """Remove CLI 503 capacity retry lines and extra blank lines around them."""
+    if not text:
+        return text, 0
+    kept: list[str] = []
+    pending_blanks: list[str] = []
+    removed = 0
+    after_notice = False
+    had_blank_before_notice = False
+
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if _UPSTREAM_CAPACITY_NOTICE_RE.match(stripped):
+            removed += 1
+            if pending_blanks:
+                had_blank_before_notice = True
+            pending_blanks.clear()
+            after_notice = True
+        elif stripped == "":
+            pending_blanks.append(line)
+        else:
+            if kept:
+                if not after_notice:
+                    kept.extend(pending_blanks)
+                elif pending_blanks or had_blank_before_notice:
+                    kept.append(pending_blanks[0] if pending_blanks else "\n")
+            pending_blanks.clear()
+            after_notice = False
+            had_blank_before_notice = False
+            kept.append(line)
+
+    if removed == 0:
+        return text, 0
+    if not after_notice:
+        kept.extend(pending_blanks)
+    elif kept:
+        kept[-1] = kept[-1].rstrip("\r\n")
+    return "".join(kept), removed
 
 
 @dataclass
@@ -279,13 +331,31 @@ class Runtime:
                                     "STOP",
                                     "AGY 未正常结束本轮，请在 CLI 检查限制或拒绝原因。",
                                 )
-                            answer = "".join(text_parts)[len(request.consumed_text) :]
+                            raw_answer = "".join(text_parts)[len(request.consumed_text) :]
+                            answer, stripped_notices = strip_upstream_capacity_notices(
+                                raw_answer
+                            )
                             if not answer.strip():
+                                if stripped_notices:
+                                    logger.warning(
+                                        "AGY 丢弃了 %s 条上游容量告警，剩余正文为空。",
+                                        stripped_notices,
+                                    )
+                                    raise AgyError(
+                                        "QUOTA",
+                                        "AGY 额度不足或容量不可用，请检查官方 CLI。",
+                                    )
                                 raise AgyError("EMPTY", "AGY 没有返回正文。")
+                            if stripped_notices:
+                                logger.warning(
+                                    "AGY 已过滤 %s 条上游容量告警，仅保留正文。",
+                                    stripped_notices,
+                                )
                             session.expected = request.hashes + [
                                 digest({"role": "assistant", "content": answer})
                             ]
                             completed = True
+                            event = Event("done", text=answer, result=result)
                         yield event
                 finally:
                     await turn.aclose()

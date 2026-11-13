@@ -1,5 +1,11 @@
 # 变更记录
 
+## 0.4.3
+
+- 修复上游 Antigravity CLI 容量不足（`503 UNAVAILABLE: No capacity available`）时，CLI 的重试告警被当作助手正文发给用户的问题：新增 `strip_upstream_capacity_notices`，过滤 `⚠ API error (attempt N)` 告警行、保留真实回答。
+- 若整段只有告警、没有正文，改为抛出 `QUOTA` 错误交给 AstrBot 触发 fallback（如 `glm-5.2`），不再把告警原文发到聊天；日志只记录过滤条数，不记录正文或凭据。
+- 新增 `tests/test_upstream_notice_filter.py`（告警+正文、纯告警、正常含 error 字样、空行/缩进变体、会话与 provider 路径），并保持原有离线测试全通过（96 项）。
+
 ## 0.4.2
 
 - 重构插件前端面板 UI（`views/setup`）：移除大号衬线欢迎标语与冗余说明文字，改为现代极简黑白双栏卡片布局（移动端自适应单栏），自带浅色/深色主题一键切换并兼容宿主主题同步。

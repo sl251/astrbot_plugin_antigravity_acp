@@ -400,7 +400,7 @@ class AgyProvider(Provider):
                         )
                     yield LLMResponse(
                         role="assistant",
-                        completion_text="".join(text_parts),
+                        completion_text=event.text or "".join(text_parts),
                         reasoning_content="".join(thoughts) or None,
                         usage=token_usage(result),
                         is_chunk=False,
