@@ -105,7 +105,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
   这两个功能默认关闭。如果需要开启：
   1. 先在 **插件配置** 中开启 `enable_tools` 或 `enable_images`，保存并重载插件；
   2. 再去 AstrBot 的 **模型 / 提供商配置** 中，为对应模型勾选 `tool_use` 或 `image` 能力。两边同时开启才会生效。
-  3. 从 `v0.5.0` 起建议通过提供商 `custom_extra_body.agy_tools_mode`（`chat` / `tools` / `inherit`）或在「首次设置」中选择模型角色做聊天/工具分流：纯聊天用 `chat`（绝不注入工具 schema，走精简 `astrbot-chat` 代理），需要工具的会话用 `tools`（仍受插件总闸 `enable_tools` 控制）。
+  3. 从 `v0.5.1` 起建议通过提供商 `custom_extra_body.agy_tools_mode`（`chat` / `tools` / `inherit`）或在「首次设置」中选择模型角色做聊天/工具分流：纯聊天用 `chat`（绝不注入工具 schema，走精简 `astrbot-chat` 代理），需要工具的会话用 `tools`（仍受插件总闸 `enable_tools` 控制）。
 - **只读诊断与成本统计**：
   管理员可执行 `/agy doctor` 进行无生成连通自检，或执行 `/agy cost` 查看各实例只读缓存复用、Token 统计与进程池摘要（不发送任何模型请求）。
 - **关于连通测试与额度**：
@@ -117,7 +117,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
-- **v0.5.0 (当前版本)**：增强长会话与稳定性能力——安全会话复用（`strict` 默认 + 可选 `structured` 上下文分层、双账本与重建归因）、聊天/工具实例分流（`agy_tools_mode` + 精简 `astrbot-chat` 代理）、结构化轮次遥测 JSON 与只读 `/agy cost` 统计、以及 `EMPTY` 抑制 / `QUOTA` 冷却熔断。
+- **v0.5.1（当前版本）**：合并原计划 0.5.0 的安全会话复用、聊天/工具分流、`/agy cost` 统计和失败冷却，以及原计划 0.4.4 的 #4–#7 修复：模型列表来源绑定、配置自愈、微信 JPEG 尾部裁剪、上游重试告警过滤。0.5.0 与 0.4.4 均未单独发布；#4 的响应耗时问题仍在跟踪。
 - **v0.4.3**：过滤上游 CLI 容量不足时输出的 `503 UNAVAILABLE` 告警行，纯告警轮次转为 `QUOTA` 交给 AstrBot fallback。
 - **v0.4.2**：调整了启动策略，把环境预检放到后台静默执行，没装 `agy` 也不会卡住 AstrBot 启动了；清理了内部状态同步的冗余代码。
 - **v0.4.1**：修了一波细节，去掉了没用的配置项，支持直接粘贴完整的 localhost 回调链接完成登录。
@@ -140,7 +140,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 ## 1. System Identity & Core Invariants (核心契约与安全边界)
 
-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.5.0`)
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.5.1`)
 - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
 - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
 - **Compliance & Security Invariants (DO NOT VIOLATE)**:
