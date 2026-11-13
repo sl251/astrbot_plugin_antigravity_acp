@@ -291,3 +291,45 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
             done = next(e for e in events if e.kind == "done")
             self.assertEqual(done.text, "真实回复内容")
             await runtime.close()
+
+    async def test_retry_eof_then_terminal_marker_preserves_network_and_leaks_nothing(self):
+        fixture = Path(__file__).with_name("fake_cli.py")
+        settings = Settings(auth_bridge=False, startup_timeout=5, request_timeout=5)
+
+        client = AcpClient(settings)
+        self.addAsyncCleanup(client.close)
+        await client.start([sys.executable, str(fixture), "retry-eof-terminal"], self.root)
+        await client.new_session(self.root)
+        transport_texts = []
+        with self.assertRaises(AgyError) as caught_transport:
+            async for ev in client.generate("hello"):
+                if ev.kind == "text":
+                    transport_texts.append(ev.text)
+        self.assertEqual(caught_transport.exception.code, "NETWORK")
+        self.assertEqual(transport_texts, [])
+        await client.close()
+
+        runtime = Runtime(settings, self.root)
+        self.addAsyncCleanup(runtime.close)
+        request = normalize([], "你好", None, None, 1024)
+        emitted_texts = []
+        with (
+            patch(
+                "agy_provider.sessions.discover",
+                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+            ),
+            patch(
+                "agy_provider.sessions.launch_args",
+                return_value=[sys.executable, str(fixture), "retry-eof-terminal"],
+            ),
+            patch("agy_provider.sessions.select", AsyncMock()),
+        ):
+            with self.assertRaises(AgyError) as caught_session:
+                async for ev in runtime.stream(
+                    request, "conv-retry-eof-terminal", "gemini-test", "low"
+                ):
+                    if ev.kind == "text":
+                        emitted_texts.append(ev.text)
+            self.assertEqual(caught_session.exception.code, "NETWORK")
+            self.assertEqual(emitted_texts, [])
+        await runtime.close()

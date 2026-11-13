@@ -213,14 +213,14 @@ class NoticeTests(unittest.TestCase):
                     guard.feed("", final=True)
                 self.assertEqual(caught.exception.code, "NETWORK")
 
-        # Ambiguous warning prefix split before a legacy terminal failure marker.
+        # Ambiguous warning prefix split before a legacy terminal failure marker preserves QUOTA.
         marker_text = "⚠ API error (attempt 1): 503 capacity\n⚠ Agent execution terminated due to error."
         guard = _AgentTextGuard()
         for ch in marker_text:
             self.assertEqual(guard.feed(ch), "")
         with self.assertRaises(AgyError) as caught:
             guard.feed("", final=True)
-        self.assertEqual(caught.exception.code, "UPSTREAM")
+        self.assertEqual(caught.exception.code, "QUOTA")
 
         # Retry line followed by normal text passes cleanly through _AgentTextGuard.
         normal = "⚠ API error (attempt 1): unexpected eof\n正常回复"
@@ -480,3 +480,22 @@ class NoticeTests(unittest.TestCase):
         out = "".join(guard.feed(ch) for ch in quoted) + guard.feed("", final=True)
         self.assertEqual(out, quoted)
         self.assertEqual(guard.error_code, "")
+
+    def test_terminal_marker_preserves_retry_error_code_or_defaults_upstream(self):
+        post_eof = (
+            '\n⚠ API error (attempt 1): request failed: Post '
+            '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF\n'
+        )
+        terminal_line = "⚠ Agent execution terminated due to error.\n"
+
+        guard = _AgentTextGuard()
+        self.assertEqual(guard.feed(post_eof), "")
+        with self.assertRaises(AgyError) as caught:
+            guard.feed(terminal_line)
+        self.assertEqual(caught.exception.code, "NETWORK")
+
+        # Without a preceding retry notice, terminal marker defaults to UPSTREAM.
+        plain_guard = _AgentTextGuard()
+        with self.assertRaises(AgyError) as caught_plain:
+            plain_guard.feed(terminal_line)
+        self.assertEqual(caught_plain.exception.code, "UPSTREAM")

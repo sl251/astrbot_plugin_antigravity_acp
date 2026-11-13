@@ -179,6 +179,7 @@ for line in sys.stdin:
             "retry-post-eof-only",
             "retry-stream-interrupted-only",
             "retry-multiline-then-answer",
+            "retry-eof-terminal",
         }:
             chunks = {
                 "retry-quota-only": (
@@ -208,6 +209,10 @@ for line in sys.stdin:
                     "⚠ API error (attempt 1): request failed: Post\n",
                     '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": unexpected EOF\n',
                     "真实回复内容",
+                ),
+                "retry-eof-terminal": (
+                    '\n⚠ API error (attempt 1): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF\n',
+                    "⚠ Agent execution terminated due to error.\n",
                 ),
             }[scenario]
             for text in chunks:

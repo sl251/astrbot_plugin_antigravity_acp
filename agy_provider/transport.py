@@ -46,7 +46,8 @@ class _AgentTextGuard:
             if self.line_start:
                 candidate = line.strip()
                 if candidate in self.markers and (newline or final):
-                    raise AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
+                    code = self.retries.error_code or "UPSTREAM"
+                    raise AgyError(code, "AGY agent 执行失败，请检查官方 CLI。")
                 possible = any(
                     marker.startswith(line.lstrip()) or (candidate == marker)
                     for marker in self.markers
@@ -519,8 +520,9 @@ class AcpClient:
                         "execution_error",
                         "internal_error",
                     }:
+                        code = self.text_guard.retries.error_code or "UPSTREAM"
                         raise self._diagnose(
-                            AgyError("UPSTREAM", "AGY agent 执行失败，请检查官方 CLI。")
+                            AgyError(code, "AGY agent 执行失败，请检查官方 CLI。")
                         )
                     remaining = self.text_guard.feed("", final=True)
                     if remaining:
