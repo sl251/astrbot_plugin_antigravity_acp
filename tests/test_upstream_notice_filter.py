@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
+
 from agy_provider import sessions as sessions_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
@@ -105,7 +107,7 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_stream_strips_notices_updates_expected_and_logs_count(self):
         answer = "只要编剧胆子大，明年直接让天理下池子给大伙端茶倒水"
         chunks = [_make_notices(5) + "\n", answer]
-        with self.assertLogs(sessions_module.logger, level="WARNING") as logs:
+        with patch.object(sessions_module.logger, "warning") as warning:
             runtime, request, events = await self._run_stream(chunks, key="conv-1")
 
         done = next(e for e in events if e.kind == "done")
@@ -115,21 +117,24 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
             session.expected,
             request.hashes + [digest({"role": "assistant", "content": answer})],
         )
-        self.assertEqual(len(logs.output), 1)
-        self.assertIn("5", logs.output[0])
-        self.assertNotIn(answer, logs.output[0])
-        self.assertNotIn("UNAVAILABLE", logs.output[0])
+        warning.assert_called_once()
+        message, count = warning.call_args.args
+        self.assertEqual(count, 5)
+        self.assertNotIn(answer, message)
+        self.assertNotIn("UNAVAILABLE", message)
 
     async def test_session_stream_raises_quota_when_only_notices(self):
         chunks = [_make_notices(5) + "\n"]
-        with self.assertLogs(sessions_module.logger, level="WARNING") as logs:
-            with self.assertRaises(AgyError) as caught:
-                await self._run_stream(chunks, key="conv-only-notices")
+        with (
+            patch.object(sessions_module.logger, "warning") as warning,
+            self.assertRaises(AgyError) as caught,
+        ):
+            await self._run_stream(chunks, key="conv-only-notices")
 
         self.assertEqual(caught.exception.code, "QUOTA")
         self.assertIn("AGY 额度不足或容量不可用，请检查官方 CLI。", str(caught.exception))
-        self.assertEqual(len(logs.output), 1)
-        self.assertIn("5", logs.output[0])
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.args[1], 5)
 
     async def test_session_stream_keeps_empty_error_without_notices(self):
         with self.assertRaises(AgyError) as caught:

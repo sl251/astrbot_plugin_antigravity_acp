@@ -1,7 +1,6 @@
 """Bounded native process pool; AstrBot history is the source of truth."""
 
 import asyncio
-import logging
 import re
 import shutil
 import time
@@ -10,6 +9,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from astrbot.api import logger
 
 from .config import Settings
 from .errors import AgyError, classified_error
@@ -26,11 +27,6 @@ from .process import LaunchInfo, discover, launch_args, make_home
 from .telemetry import TelemetryTracker, TurnMeter
 from .tools import ToolBroker, ToolSnapshot
 from .transport import AcpClient, Event
-
-try:
-    from astrbot.api import logger
-except ImportError:
-    logger = logging.getLogger(__name__)
 
 _UNSET = object()
 

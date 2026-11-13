@@ -2,23 +2,18 @@
 
 import asyncio
 import hashlib
-import logging
 import os
 import platform
 import secrets
 from copy import deepcopy
 from pathlib import Path
 
+from astrbot.api import logger
+
 from .errors import AgyError
 from .login import LoginFlow
 from .paths import plugin_data_root
 from .probe import probe
-
-try:
-    from astrbot.api import logger
-except ImportError:
-    logger = logging.getLogger(__name__)
-
 
 PLUGIN_NAME = "astrbot_plugin_antigravity_acp"
 HINTS = {

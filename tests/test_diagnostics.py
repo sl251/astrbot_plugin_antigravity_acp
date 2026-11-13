@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
+
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError, remote_error
 from agy_provider.onboarding import environment, next_step

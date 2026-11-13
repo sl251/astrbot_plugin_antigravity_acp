@@ -2,11 +2,12 @@ import json
 import os
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
 
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError

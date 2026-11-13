@@ -10,6 +10,8 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
+
 from agy_provider import onboarding as onboarding_module
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
@@ -555,13 +557,13 @@ class OnboardingTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(label=label):
                 self.context.provider_manager = legacy
-                with self.assertLogs(onboarding_module.logger, level="WARNING") as logs:
+                with patch.object(onboarding_module.logger, "warning") as warning:
                     await self.apply()
                 self.assertEqual(self.service.action_error, "")
                 self.assertIsNotNone(self.service.result)
                 self.assertEqual(len(legacy.persisted), 1)
                 self.assertNotIn("provider_source_id", legacy.persisted[0])
-                self.assertTrue(logs.output)
+                warning.assert_called()
 
     async def test_tools_mode_chat_omits_tool_use_and_allows_separate_tools_instance(self):
         self.service.settings = Settings(enable_tools=True)

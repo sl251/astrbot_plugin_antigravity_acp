@@ -5,22 +5,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import logging
 import secrets
 import statistics
 import time
 import uuid
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    logger = logging.getLogger(__name__)
-
-# Dedicated fallback logger used only if the host logger does not expose .info().
-_fallback_logger = logging.getLogger("agy_provider.telemetry")
+from astrbot.api import logger
 
 MAX_HISTORY_TURNS = 100
 MAX_TOMBSTONES = 1024
@@ -96,11 +89,7 @@ def extract_acp_usage(
 
 
 def _emit_json_line(line: str) -> None:
-    info = getattr(logger, "info", None)
-    if callable(info):
-        info(line)
-    else:
-        _fallback_logger.info(line)
+    logger.info(line)
 
 
 @dataclass

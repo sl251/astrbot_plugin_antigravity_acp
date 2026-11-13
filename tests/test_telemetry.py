@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
+
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.messages import normalize
@@ -200,10 +202,13 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
             replay_bytes=0,
         )
         meter.request_sent = True
-        first = meter.finish(status="ok")
-        second = meter.finish(status="error", error_code="UPSTREAM")
+        with patch("agy_provider.telemetry.logger.info") as info:
+            first = meter.finish(status="ok")
+            second = meter.finish(status="error", error_code="UPSTREAM")
+        info.assert_not_called()
         self.assertIsNotNone(first)
         self.assertIsNone(second)  # idempotent!
+        self.assertEqual(list(tracker.history), [first])
 
         # Bounded tombstones
         for i in range(1100):
