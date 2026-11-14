@@ -1,5 +1,23 @@
 # 变更记录
 
+## 0.5.2（正式发布）
+
+上架审查整改版：只调整运行时日志来源，无功能、配置或协议行为变更。
+
+### 问题修复
+
+- **日志记录器统一为宿主 logger**：`agy_provider/onboarding.py`、`sessions.py`、`telemetry.py` 不再使用 Python 内置 `logging`，也不保留 `ImportError` 回退分支，一律 `from astrbot.api import logger`；`host_compat` 继续由调用方（`main.py`）显式注入宿主 logger，未注入直接 `TypeError`。`telemetry._emit_json_line` 由 `getattr(logger, "info", ...)` 兜底改为直接调用宿主 `logger.info`，单参数字符串调用，行为等价。
+- **离线测试补齐宿主 logger 夹具**：新增 `tests/astrbot_stub.py`，在无 AstrBot 环境注入受 `spec` 约束的 logger 桩；原 `assertLogs` 断言改为 `patch.object`，保留调用次数、参数个数与“日志不含答案正文”校验。
+
+### 升级说明
+
+- 覆盖升级即可，无配置迁移；`probe.py`、`mcp_bridge.py` 等独立入口仍不依赖宿主 logger，可脱离 AstrBot 运行。
+- 依赖宿主 logger 的模块（`onboarding` / `sessions` / `telemetry`）现在必须在 AstrBot 进程内导入；脱离宿主导入会直接 `ModuleNotFoundError: astrbot`，与 `main.py`、`provider.py` 原有行为一致。
+
+### 验证
+
+- 156 项 Python 离线回归（155 通过、1 项 Windows 专属跳过）与前端交互测试通过；Ubuntu / Windows × Python 3.11 / 3.12 四组 CI 全绿。
+
 ## 0.5.1（正式发布）
 
 本版是从 **v0.4.3 升级**时需要阅读的完整更新说明：合并了原计划的 **0.5.0 功能线**与 **0.4.4 修复线**，这两个中间版本均未单独发布，直接升级至 **v0.5.1** 即可。
