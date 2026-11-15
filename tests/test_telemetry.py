@@ -50,8 +50,8 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
             return now
 
         def run_with_scenario(scenario):
-            def fake_launch(info, home, use_default_agent=False):
-                args = real_launch_args(info, home, use_default_agent)
+            def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+                args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
                 return [sys.executable, str(FIXTURE), scenario, *args[1:]]
 
             return patch("agy_provider.sessions.launch_args", side_effect=fake_launch)
@@ -186,7 +186,7 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
         buckets, cache_present = extract_acp_usage(
             {"usage": {"inputTokens": 300, "outputTokens": 15}}
         )
-        self.assertEqual(buckets, {"input_other": 300, "input_cached": 0, "output": 15})
+        self.assertEqual(buckets, {"input_other": 300, "input_cached": None, "output": 15})
         self.assertFalse(cache_present["cachedReadTokens"])
 
         t = 10.0

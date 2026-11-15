@@ -110,9 +110,9 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
         signal = asyncio.Event()
         seen_homes = []
 
-        def fake_launch(info, home, use_default_agent=False):
+        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
             seen_homes.append((home, use_default_agent))
-            args = real_launch_args(info, home, use_default_agent)
+            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with patch.dict(sys.modules, stubs):
@@ -198,8 +198,8 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
         func_tool = SimpleNamespace(tools=[_tool("calc")])
         signal = asyncio.Event()
 
-        def fake_launch(info, home, use_default_agent=False):
-            args = real_launch_args(info, home, use_default_agent)
+        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with patch.dict(sys.modules, stubs):

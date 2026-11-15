@@ -129,7 +129,7 @@ class NoticeTests(unittest.TestCase):
                     guard = RetryNoticeGuard()
                     out = guard.feed(candidate) + guard.feed("", final=True)
                     self.assertEqual(out, "")
-                    self.assertEqual(guard.error_code, "QUOTA")
+                    self.assertEqual(guard.error_code, "RATE_LIMIT")
 
     def test_retry_notice_split_across_chunks_never_leaks(self):
         for prefix in ("⚠", "⚠️"):
@@ -220,7 +220,7 @@ class NoticeTests(unittest.TestCase):
             self.assertEqual(guard.feed(ch), "")
         with self.assertRaises(AgyError) as caught:
             guard.feed("", final=True)
-        self.assertEqual(caught.exception.code, "QUOTA")
+        self.assertEqual(caught.exception.code, "RATE_LIMIT")
 
         # Retry line followed by normal text passes cleanly through _AgentTextGuard.
         normal = "⚠ API error (attempt 1): unexpected eof\n正常回复"

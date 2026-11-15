@@ -179,6 +179,7 @@ def remote_error(error: object, *, retry_notice: bool = False) -> AgyError:
             r"authentication.required|unauth|not.logged.in|sign.in|login|credential|\b401\b",
         ),
         ("QUOTA", r"quota[\s_-]+(?:exceeded|exhausted)|insufficient.credits|"
+         r"resource.{0,32}exhausted.{0,16}\(quota\)|"
          r"(?:daily|monthly|account|subscription|billing).{0,80}(?:quota|limit|credits?).{0,40}"
          r"(?:exceeded|exhausted|reached|depleted)"),
         ("RATE_LIMIT", r"rate.limit|too.many|\b429\b|resource_exhausted|capacity|\b503\b"),

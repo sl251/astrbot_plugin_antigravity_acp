@@ -64,8 +64,9 @@ async def main(path):
 
     def send(obj):
         obj["jsonrpc"] = "2.0"
-        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        # MCP is UTF-8 irrespective of Windows locale/PYTHONIOENCODING.
+        sys.stdout.buffer.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
 
     async def handle(request):
         ident = request["id"]

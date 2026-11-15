@@ -133,7 +133,7 @@ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
     # Closing a job also kills descendants after the front process exited.
     job = getattr(proc, "_agy_job", None)
     if job is not None:
-        job.close()
+        await job.stop()
         proc._agy_job = None
     # Own process group only. Windows retains taskkill /T as a fallback.
     if os.name == "posix":

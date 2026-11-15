@@ -7,6 +7,7 @@ effort immediately after spawn, and taskkill remains the documented fallback.
 """
 
 import ctypes
+import asyncio
 import os
 from ctypes import wintypes
 
@@ -40,6 +41,14 @@ class _ExtendedLimits(ctypes.Structure):
     ]
 
 
+class _Accounting(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_int64) for name in (
+        "TotalUserTime", "TotalKernelTime", "ThisPeriodTotalUserTime", "ThisPeriodTotalKernelTime",
+    )] + [(name, wintypes.DWORD) for name in (
+        "TotalPageFaultCount", "TotalProcesses", "ActiveProcesses", "TotalTerminatedProcesses",
+    )]
+
+
 class WindowsJob:
     def __init__(self, api, handle):
         self._api, self._handle = api, handle
@@ -55,6 +64,8 @@ class WindowsJob:
             ("OpenProcess", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
             ("AssignProcessToJobObject", [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
             ("CloseHandle", [wintypes.HANDLE], wintypes.BOOL),
+            ("TerminateJobObject", [wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+            ("QueryInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p], wintypes.BOOL),
         ):
             function = getattr(api, name)
             function.argtypes, function.restype = args, result
@@ -83,3 +94,24 @@ class WindowsJob:
         if self._handle is not None:
             handle, self._handle = self._handle, None
             self._api.CloseHandle(handle)
+
+    async def stop(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            # CloseHandle's kill-on-close is asynchronous. Waiting only for the
+            # front process can leave a dying MCP child holding the workspace
+            # as its cwd, causing WinError 32 during session directory cleanup.
+            self._api.TerminateJobObject(self._handle, 1)
+            deadline = asyncio.get_running_loop().time() + 3
+            while True:
+                accounting = _Accounting()
+                if not self._api.QueryInformationJobObject(
+                    self._handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
+                ) or accounting.ActiveProcesses == 0:
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            self.close()

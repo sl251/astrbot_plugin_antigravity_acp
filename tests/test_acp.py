@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -180,8 +181,8 @@ class AcpTests(unittest.IsolatedAsyncioTestCase):
 
         with patch(
             "agy_provider.process.asyncio.create_subprocess_exec",
-            AsyncMock(return_value=object()),
-        ) as create:
+            AsyncMock(return_value=SimpleNamespace(pid=999999)),
+        ) as create, patch("agy_provider.process.WindowsJob.attach", return_value=None):
             await spawn(["fake-agy", "acp"], self.root)
         kwargs = create.call_args.kwargs
         self.assertEqual(
