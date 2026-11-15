@@ -1,0 +1,3478 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 4f55d4b..a33db32 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,38 @@
+ # 变更记录
+ 
++## 0.6.0（开发分支，待独立验收）
++
++- 分离 ACP 上下文占用和计费 usage；同会话连续可信占用疑似压缩后，在本轮终态回收，下一轮按宿主历史重建。新增阈值配置，缺字段安全跳过。
++- 分块重试 banner 区分账号额度、持续 429、暂态 503 与致命认证错误；强信号提前结束请求。修复失败状态阻止 session/cancel 的问题；RATE_LIMIT 与 QUOTA 共用原 FailureGuard，保留各自错误码。
++- 已输出内容/交接工具后禁止自动重放；扩展原生 runner 兼容层，拦截 AstrBot 4.29.4 在异常后继续调用 fallback provider 的路径。
++- 新增默认 inherit 的 `agy_customizations_mode`；minimal 仅在支持参数的 CLI 工具 Agent 启用，未做真实 MCP/A-B 验收。
++- `/agy cost` 新增上下文/压缩/快速中断摘要，以及模式、模型、结果、冷热分组。内存样本限制为 24 小时内最近 100 轮；持久日志仍默认关闭。
++- Windows 工具桥使用仅绑定 127.0.0.1 的随机端口及每会话双向挑战认证；POSIX 继续使用私有 Unix socket。拒绝非活跃 prompt 的工具调用。
++- Windows 增加 Job Object 进程树托管，失败时回退 taskkill；重复清理共享同一任务，spawn 多次取消不放弃子进程所有权。
++- doctor/设置页显示 CLI 参数能力、组件实验状态、桥类型及实际进程托管。CLI 探测输出有界。更新仍由管理员按官方指引手动操作，远程最新版明确未检查。
++- 动态 MCP/模型热更新、CLI 自动下载安装与热替换未交付，原因与后续验收矩阵见 [实施与交接计划](docs/liftgate-hardening-plan.md)。
++
++后续验收：修复明确 quota RPC 错误漏分类、MCP relay 非 UTF-8 默认编码下 Unicode 结果失败、Windows Job 关闭后后代未完全退出导致目录清理 WinError 32 的竞态。补齐专项回归并同步旧测试夹具；本机 Windows 198 项 Python 测试中 195 通过、3 项按平台/权限跳过，设置页 12 项通过。详见 [PR #9 验收记录](docs/pr9-acceptance.md)。真实 AGY/完整宿主和性能 A/B 尚未验收，版本标识不代表已发布 Release。
++
++## 0.5.3（正式发布）
++
++Windows 深路径修复版：只调整文件系统路径处理，无功能、配置或协议行为变更。
++
++### 问题修复
++
++- **#8 Windows 深路径下首聊失败**：宿主数据目录过深时，首轮对话直接失败并报 `FileNotFoundError: ...agents\astrbot-chat.md`。实际原因不是父目录缺失，而是 Win32 `MAX_PATH`（260 字符）拒绝打开文件，错误被 Python 映射成与「目录不存在」同形的 `errno 2`。现在 Windows 下会话数据根目录统一转为扩展长度绝对路径（本地盘 `\\?\`、UNC `\\?\UNC\`），目录创建、文件写入、权限设置、失败清理，以及自检与登录临时目录都继承该前缀；相对路径与 `..` 在加前缀前先规范化，已有 `\\?\` / `\\.\` 前缀保持不变。Linux / Docker 短路径环境行为完全不变，Windows 用户不再需要开启 `LongPathsEnabled`。
++- **回归覆盖**：新增 `tests/test_paths.py`，覆盖非 Windows 路径不变、盘符 / UNC / 命名空间前缀规则、相对路径规范化、259 / 260 / 400 / 800 字符边界、工具模式、写入失败清理、Runtime 与自检清理、登录临时目录；Windows 专属用例在其他平台自动跳过。
++
++### 升级说明
++
++- 覆盖升级即可，无配置迁移。
++- Windows 下 `--gemini-dir`、子进程工作目录与 ACP `session/new` 收到的是扩展长度路径（`\\?\C:\...`）。若所用 `agy` 版本对前缀处理异常，请附 `agy --version` 在 issue 反馈。
++
++### 验证
++
++- Linux（Python 3.11 / 3.12）：`compileall` 通过，165 项离线回归中 157 项通过、8 项 Windows 专属用例按预期跳过。
++- Windows（Python 3.11 / 3.12，windows-latest）：165 项中 163 项通过、2 项 POSIX 专属用例跳过，含 7 项长路径专属用例（259 / 260 / 400 / 800 字符边界、工具模式、写入失败清理、Runtime 与自检清理、登录临时目录）。
++
+ ## 0.5.2（正式发布）
+ 
+ 上架审查整改版：只调整运行时日志来源，无功能、配置或协议行为变更。
+diff --git a/README.md b/README.md
+index 4209227..6694c64 100644
+--- a/README.md
++++ b/README.md
+@@ -7,7 +7,9 @@
+ ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
+ ![Python](https://img.shields.io/badge/Python-3.11+-blue)
+ ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
+-![Status](https://img.shields.io/badge/Status-Active%20(v0.5.2)-brightgreen)
++![Status](https://img.shields.io/badge/Status-v0.6.0%20pending%20validation-yellow)
++
++> **本分支为 0.6.0 待实机验收版本**，尚未发布。已完成离线回归与 Windows 子进程/工具桥验证，结果及限制见 [PR #9 验收记录](docs/pr9-acceptance.md)。真实 AGY/完整 AstrBot 部署和组件精简 A/B 仍待验收；实施范围与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。
+ 
+ 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
+ 
+@@ -117,7 +119,9 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
+ 
+ *(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
+ 
+-- **v0.5.2（当前版本）**：上架审查整改：运行时日志记录器统一为宿主 `astrbot.api.logger`，删除内置 `logging` 及 `ImportError` 回退分支；无功能与配置变更。
++- **v0.6.0（本分支，待验收）**：疑似上游压缩后终态退休、强错误提前中断、部分输出/工具失败防重放、Windows 认证 MCP 桥与 Job Object、成本分组和 CLI 能力诊断。组件精简实验默认关闭；动态 MCP 更新与 CLI 安装器未交付。
++- **v0.5.3（上一正式版本）**：修复 #8：Windows 深路径宿主下首聊因 `MAX_PATH`（260 字符）被拒而报 `FileNotFoundError`；会话数据改用 Win32 扩展长度路径（`\\?\`），不再要求开启 `LongPathsEnabled`。
++- **v0.5.2**：上架审查整改：运行时日志记录器统一为宿主 `astrbot.api.logger`，删除内置 `logging` 及 `ImportError` 回退分支；无功能与配置变更。
+ - **v0.5.1**：合并原计划 0.5.0 的安全会话复用、聊天/工具分流、`/agy cost` 统计和失败冷却，以及原计划 0.4.4 的 #4–#7 修复：模型列表来源绑定、配置自愈、微信 JPEG 尾部裁剪、上游重试告警过滤。0.5.0 与 0.4.4 均未单独发布；#4 的响应耗时问题仍在跟踪。
+ - **v0.4.3**：过滤上游 CLI 容量不足时输出的 `503 UNAVAILABLE` 告警行，纯告警轮次转为 `QUOTA` 交给 AstrBot fallback。
+ - **v0.4.2**：调整了启动策略，把环境预检放到后台静默执行，没装 `agy` 也不会卡住 AstrBot 启动了；清理了内部状态同步的冗余代码。
+@@ -141,7 +145,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
+ 
+ ## 1. System Identity & Core Invariants (核心契约与安全边界)
+ 
+-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.5.2`)
++- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.0`, pending validation)
+ - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
+ - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
+ - **Compliance & Security Invariants (DO NOT VIOLATE)**:
+@@ -156,16 +160,31 @@ flowchart LR
+   U[Messaging Platform / WebUI] --> R[AstrBot Runner]
+   R -->|Stream / Non-stream Request| P[Provider: agy_acp]
+   P -->|ACP over stdio| A["agy acp (Isolated Session Subprocess)"]
+-  A -->|MCP tools/call| B["mcp_bridge.py (Local Unix Socket)"]
++  A -->|MCP tools/call| B["mcp_bridge.py (Unix Socket / Authenticated Loopback)"]
+   B -->|Yield & Execute via FunctionToolExecutor| R
+ ```
+ 
+ - **Session Binding Key**: `(provider_instance_id, astrbot_session_id, conversation_id)`.
+ - **History Prefix Matching & Dual-Ledger Reuse**: Maintains separated `host_expected` and `sent_window` ledgers with `compare_history` (`exact` / `host_trim` / `rewrite` / `append_gap` / `unknown`). Defaults to `session_reuse_mode = "strict"`; when configured to `"structured"` and the host supplies validated `agy_context_parts`, transient data is attached to user turns instead of invalidating the live system prompt (otherwise falls back to strict comparison).
+ - **Chat / Tools Split (`agy_tools_mode`)**: Provider `custom_extra_body.agy_tools_mode` accepts `"inherit"` (default), `"chat"`, or `"tools"`. `"chat"` always binds `--agent astrbot-chat` (`tools: []`, `excludeDefaultComponents: true`) and rejects tool history (`TOOLS_DISABLED`). `"tools"` cannot bypass plugin master `enable_tools = false` or `tool_choice = "none"`.
+-- **Observability & Failure Guard**: Emits one HMAC-anonymized JSON telemetry line (`event: "agy.turn"`, INFO level) per ACP turn and supports read-only `/agy cost`. Short-term guards deduplicate identical `EMPTY` requests (`empty_dedupe_ttl`, default 30s) and enforce per-`(provider_id, model)` `QUOTA` cooldowns (`quota_cooldown`, default 60s, capped at 300s) with single half-open probe recovery; never caches successful responses.
+-- **Host Tool Bridge (`mcp_bridge.py`)**: When `enable_tools=true`, host tools (`FunctionTool`, `MCPTool`, `HandoffTool`, and direct-send plugins like TTS returning `None`) are exposed to `agy acp` via a local Unix Socket MCP server. Automatically adapts AstrBot `skills_like` mode to `full` mode.
+-- **Process Pool & Cleanup**: Intra-session requests are serialized; cross-session requests run in parallel up to `max_concurrency`. Idle sessions are reaped via LRU pool. Process trees are terminated via process groups on Linux/macOS and `taskkill /T` on Windows.
++- **Observability & Failure Guard**: `/agy cost` retains up to 100 turns from the last 24 hours, grouped by mode/model/outcome/warm-cold state. JSON cost logs remain opt-in (`cost_log_enabled=false`). Context occupancy (`usage_update.used/size`) is separate from billable usage; absent usage remains unknown. `EMPTY` deduplication and per-`(provider_id, model)` `QUOTA`/`RATE_LIMIT` cooldowns share the existing FailureGuard (default 60s, capped at 300s, one half-open probe). Transient 503 retry banners alone do not trip it.
++- **Context Retirement**: A same-window occupancy drop below 50% of a peak of at least 64000 is treated as suspected compaction. The current reply and tool turn finish normally; the session is then retired. Missing/invalid occupancy or model/config changes break the comparison chain. This is a heuristic, not proof of compaction or a billing estimate.
++- **Host Tool Bridge (`mcp_bridge.py`)**: POSIX uses a private mode-0600 Unix socket. Windows uses an ephemeral port bound only to `127.0.0.1`, a per-session 256-bit secret in the MCP child environment, and mutual challenge authentication. No remote listener or model HTTP proxy is added. Host approval/execution, schema checks, budgets and session isolation remain in force; idle/terminated turns reject tool calls. Offline Windows relay/tool-turn validation passes; actual AGY and full-host validation is pending.
++- **Process Pool & Cleanup**: Sessions remain serialized and bounded. Linux/macOS retain separate process groups. Windows attaches a kill-on-close Job Object immediately after spawn and falls back to `taskkill /T` when unavailable. Attachment is not atomic with spawn; POSIX does not add `preexec_fn`/parent-death hooks, so host SIGKILL and unbound Windows descendants remain limitations.
++- **No Replay After Output**: Partial text/thoughts or handed-off tools cause a terminal `no_retry` + `no_fallback` failure. The existing AstrBot 4.29.4 compatibility layer also intercepts later fallback candidates before they call another provider; simply adding an exception attribute would not stop this host version. Pre-output cooldown/deduplication still permits host fallback. Other runners must honor these attributes, and missing compatibility methods produce a warning. Contract tests include the official 4.29.4 fallback method; full-host deployment validation is pending.
++
++### 0.6.0 新配置与 CLI 管理
++
++| 配置 | 默认 | 说明 |
++|---|---|---|
++| `agy_customizations_mode` | `inherit` | `minimal` 仅在工具默认 Agent 加入 `--include-default-customizations=false`；不支持时明确 UNSUPPORTED。未做 MCP/A-B 验收，不建议默认启用。 |
++| `context_compaction_min_peak` | `64000` | 疑似压缩判断的最小峰值，范围 16000–2000000。 |
++| `context_compaction_drop_percent` | `50` | 当前占用严格低于峰值的此百分比才判断疑似压缩，范围 10–90。 |
++
++`history_bytes=160000`、`max_concurrent=2`、`max_sessions=4`、工具/图片总闸与严格复用默认值保持原样。
++doctor 与首次设置页显示 CLI 版本、参数支持、组件实验状态、本地工具桥和实际进程托管。
++远程最新版状态明确为未检查；插件不会下载、安装、热替换 CLI，也没有自动更新/回滚承诺。管理员可按 [官方 CLI 指引](https://antigravity.google/docs/cli/tutorial) 在停止活跃请求并备份旧文件后手动更新，失败时恢复原文件并重载插件。
++组件实验回退只需恢复 `inherit` 并重载；整体回滚与待测矩阵见 [实施交接](docs/liftgate-hardening-plan.md)。
+ 
+ ## 3. File Layout (目录结构)
+ 
+diff --git a/_conf_schema.json b/_conf_schema.json
+index c7e7b94..246a371 100644
+--- a/_conf_schema.json
++++ b/_conf_schema.json
+@@ -1,4 +1,25 @@
+ {
++  "agy_customizations_mode": {
++    "description": "AGY 工具组件模式（实验）",
++    "type": "string",
++    "default": "inherit",
++    "options": ["inherit", "minimal"],
++    "hint": "inherit 保持原行为。minimal 仅在工具默认 Agent 加入 --include-default-customizations=false；CLI 不支持时明确报 UNSUPPORTED。MCP 兼容性与 Token 收益尚未验收，请勿默认开启。恢复 inherit 并重载即可回退；纯聊天隔离 Agent 不变。"
++  },
++  "context_compaction_min_peak": {
++    "description": "疑似上下文压缩的最小峰值",
++    "type": "int",
++    "default": 64000,
++    "slider": {"min": 16000, "max": 2000000, "step": 1000},
++    "hint": "仅比较同一 ACP 会话、同一窗口大小的连续有效 usage_update.used/size。此前峰值达到此值且占用显著下降时，本轮正常交付，结束后回收会话。范围 16000–2000000；这是启发式判断，不是计费 Token。"
++  },
++  "context_compaction_drop_percent": {
++    "description": "疑似压缩后的峰值占比阈值（%）",
++    "type": "int",
++    "default": 50,
++    "slider": {"min": 10, "max": 90, "step": 1},
++    "hint": "当前占用严格低于此前峰值的此百分比才判定疑似压缩；默认 50。缺字段、零值、异常值和窗口变化不参与比较；不使用 inputTokens 推断。范围 10–90。"
++  },
+   "setup_auto_check": {
+     "description": "启动时自动检查环境",
+     "type": "bool",
+@@ -149,7 +170,7 @@
+     "description": "启用宿主工具桥（需完整工具 schema 与宿主会话）",
+     "type": "bool",
+     "default": false,
+-    "hint": "总闸；非空工具集会启用默认 agent，实测底座明显高于纯聊天。"
++    "hint": "总闸；非空工具集启用默认 agent。POSIX 使用私有 Unix socket，Windows 使用仅绑定 127.0.0.1 的每会话认证桥；执行/审批仍交宿主，跨平台端到端验收待完成。"
+   },
+   "session_reuse_mode": {
+     "description": "会话复用模式",
+@@ -165,7 +186,7 @@
+     "description": "记录每轮成本与重建原因",
+     "type": "bool",
+     "default": false,
+-    "hint": "默认关闭以免刷日志；开启后每轮输出一行脱敏 JSON。随时可用 /agy cost 查看最近汇总。"
++    "hint": "默认关闭以免刷日志；开启后每轮输出一行脱敏 JSON。/agy cost 保留每实例 24 小时内最近 100 轮，按模式/模型/结果/冷热分组；上下文占用与计费 Token 分开，未知 usage 不当作 0。"
+   },
+   "empty_dedupe_ttl": {
+     "description": "EMPTY 相同请求抑制秒数",
+@@ -182,7 +203,7 @@
+     "description": "额度/容量错误冷却秒数",
+     "type": "int",
+     "default": 60,
+-    "hint": "合法整数范围 0–300；非法数值在加载时恢复为默认值并告警。",
++    "hint": "QUOTA 与 RATE_LIMIT 共用现有冷却及单半开探针，保留各自错误码；单次 503 重试告警不会触发冷却。范围 0–300，0 禁用；非法数值恢复默认并告警。",
+     "slider": {
+       "min": 0,
+       "max": 300,
+diff --git a/agy_provider/bridge_transport.py b/agy_provider/bridge_transport.py
+new file mode 100644
+index 0000000..fb26c76
+--- /dev/null
++++ b/agy_provider/bridge_transport.py
+@@ -0,0 +1,124 @@
++"""Private local MCP transport; also importable by the standalone stdio relay."""
++
++import asyncio
++import hashlib
++import hmac
++import json
++import secrets
++
++VERSION = 1
++FRAME_LIMIT = 1048576
++TOKEN_ENV = "ASTRBOT_MCP_BRIDGE_TOKEN"
++HANDSHAKE_TIMEOUT = 5
++
++
++def encode(value) -> bytes:
++    return json.dumps(value, ensure_ascii=False, separators=(",", ":"),
++                      sort_keys=True, allow_nan=False).encode("utf-8")
++
++
++def _reject_constant(_):
++    raise ValueError("Invalid JSON number")
++
++
++async def read_frame(reader, limit=FRAME_LIMIT):
++    line = await reader.readline()
++    if not line.endswith(b"\n") or len(line) > limit:
++        raise ValueError("Invalid bridge frame")
++    value = json.loads(line, parse_constant=_reject_constant)
++    if not isinstance(value, dict):
++        raise ValueError("Invalid bridge object")
++    return value
++
++
++def proof(token: str, nonce: str, request: dict) -> str:
++    return hmac.new(token.encode("ascii"), nonce.encode("ascii") + b"\n" + encode(request),
++                    hashlib.sha256).hexdigest()
++
++
++class BridgeTransport:
++    """One session key and a fresh challenge for every TCP connection.
++
++    The secret only travels via the child's MCP environment. The socket carries
++    a challenge-bound request MAC, preventing recorded requests from replaying
++    on a new connection. POSIX retains its mode-0600 Unix socket protocol.
++    """
++
++    def __init__(self, tcp: bool = False):
++        self.tcp = tcp
++        self.token = secrets.token_hex(32) if tcp else ""
++
++    async def receive(self, reader, writer):
++        if not self.tcp:
++            return await read_frame(reader)
++        async with asyncio.timeout(HANDSHAKE_TIMEOUT):
++            hello = await read_frame(reader, 1024)
++            client_nonce = hello.get("nonce")
++            if (
++                type(hello.get("version")) is not int or hello["version"] != VERSION
++                or not isinstance(client_nonce, str) or len(client_nonce) != 64
++                or any(c not in "0123456789abcdef" for c in client_nonce)
++            ):
++                raise ValueError("Invalid bridge hello")
++            nonce = secrets.token_hex(32)
++            challenge = {"version": VERSION, "nonce": nonce, "max_frame": FRAME_LIMIT}
++            writer.write(encode({**challenge, "mac": proof(self.token, client_nonce, challenge)}) + b"\n")
++            await writer.drain()
++            envelope = await read_frame(reader)
++            request, signature = envelope.get("request"), envelope.get("mac")
++            if (
++                type(envelope.get("version")) is not int or envelope["version"] != VERSION
++                or not isinstance(request, dict) or not isinstance(signature, str)
++                or len(signature) != 64 or not signature.isascii()
++                or not hmac.compare_digest(signature, proof(self.token, nonce, request))
++            ):
++                raise ValueError("Bridge authentication failed")
++            return request
++
++
++async def connect(endpoint: str, request: dict, token: str):
++    """Connect only to literal loopback or an explicit private Unix path."""
++    if not endpoint.startswith("tcp:"):
++        reader, writer = await asyncio.open_unix_connection(endpoint, limit=16 * FRAME_LIMIT)
++        try:
++            data = encode(request) + b"\n"
++            if len(data) > FRAME_LIMIT:
++                raise ValueError("Bridge frame too large")
++            writer.write(data)
++            await writer.drain()
++            return reader, writer
++        except BaseException:
++            writer.close()
++            raise
++    port = int(endpoint[4:])
++    if not 1 <= port <= 65535 or len(token) != 64 or not token.isascii():
++        raise ValueError("Invalid bridge endpoint")
++    reader, writer = await asyncio.open_connection("127.0.0.1", port, limit=16 * FRAME_LIMIT)
++    try:
++        async with asyncio.timeout(HANDSHAKE_TIMEOUT):
++            client_nonce = secrets.token_hex(32)
++            writer.write(encode({"version": VERSION, "nonce": client_nonce}) + b"\n")
++            await writer.drain()
++            challenge = await read_frame(reader, 1024)
++            nonce = challenge.get("nonce")
++            signature = challenge.pop("mac", None)
++            if (
++                type(challenge.get("version")) is not int or challenge["version"] != VERSION
++                or challenge.get("max_frame") != FRAME_LIMIT
++                or not isinstance(nonce, str) or len(nonce) != 64
++                or any(c not in "0123456789abcdef" for c in nonce)
++                or not isinstance(signature, str) or len(signature) != 64
++                or not signature.isascii()
++                or not hmac.compare_digest(signature, proof(token, client_nonce, challenge))
++            ):
++                raise ValueError("Invalid bridge challenge")
++            data = encode({"version": VERSION, "request": request,
++                           "mac": proof(token, nonce, request)}) + b"\n"
++            if len(data) > FRAME_LIMIT:
++                raise ValueError("Bridge frame too large")
++            writer.write(data)
++            await writer.drain()
++        return reader, writer
++    except BaseException:
++        writer.close()
++        raise
+diff --git a/agy_provider/config.py b/agy_provider/config.py
+index 7d08b95..07c9f50 100644
+--- a/agy_provider/config.py
++++ b/agy_provider/config.py
+@@ -31,6 +31,9 @@ class Settings:
+     enable_images: bool = False
+     session_reuse_mode: str = "strict"
+     cost_log_enabled: bool = False
++    context_compaction_min_peak: int = 64000
++    context_compaction_drop_percent: int = 50
++    agy_customizations_mode: str = "inherit"
+     empty_dedupe_ttl: int = 30
+     quota_cooldown: int = 60
+     tool_max_calls: int = 16
+@@ -52,6 +55,8 @@ class Settings:
+         strict. The callback receives only a field name and its safe replacement.
+         """
+         limits = {
++            "context_compaction_min_peak": (16000, 2000000),
++            "context_compaction_drop_percent": (10, 90),
+             "tool_max_calls": (1, 128),
+             "tool_max_concurrent": (1, 8),
+             "tool_approval_timeout": (1, 300),
+@@ -90,6 +95,10 @@ class Settings:
+         if not isinstance(reuse_mode, str) or reuse_mode not in {"strict", "structured"}:
+             raise AgyError("CONFIG", "session_reuse_mode 应为 strict/structured。")
+         parsed["session_reuse_mode"] = reuse_mode
++        customizations = values.get("agy_customizations_mode", defaults.agy_customizations_mode)
++        if not isinstance(customizations, str) or customizations not in {"inherit", "minimal"}:
++            raise AgyError("CONFIG", "agy_customizations_mode 应为 inherit/minimal。")
++        parsed["agy_customizations_mode"] = customizations
+         mode = values.get("proxy_mode", defaults.proxy_mode)
+         proxy_url = values.get("proxy_url", defaults.proxy_url)
+         if not isinstance(mode, str) or mode not in {"inherit", "custom", "direct"}:
+diff --git a/agy_provider/context_usage.py b/agy_provider/context_usage.py
+new file mode 100644
+index 0000000..a7a00f7
+--- /dev/null
++++ b/agy_provider/context_usage.py
+@@ -0,0 +1,47 @@
++"""Session occupancy observations, deliberately separate from billable usage."""
++
++from dataclasses import dataclass
++
++
++@dataclass
++class ContextUsage:
++    min_peak: int = 64000
++    drop_percent: int = 50
++    used: int | None = None
++    size: int | None = None
++    peak: int | None = None
++    suspected_compaction: bool = False
++    _comparable: bool = False
++
++    def observe(self, update: dict) -> None:
++        # Only ACP v1 usage_update.used/size has this meaning. inputTokens and
++        # cache counters measure work, not context, and must never enter here.
++        used, size = update.get("used"), update.get("size")
++        if (
++            type(used) is not int or type(size) is not int
++            or not 0 < used <= size <= 2**53 - 1
++        ):
++            self._comparable = False
++            self.used = self.size = self.peak = None
++            return
++        if self._comparable and size == self.size:
++            if (
++                self.peak is not None and self.peak >= self.min_peak
++                and used * 100 < self.peak * self.drop_percent
++            ):
++                self.suspected_compaction = True
++            self.peak = max(self.peak or used, used)
++        else:
++            # A changed window/model or invalid intervening sample breaks the
++            # comparison chain; no cross-model/cross-session inference.
++            self.peak = used
++        self.used, self.size = used, size
++        self._comparable = True
++
++    def summary(self) -> dict:
++        return {
++            "context_used": self.used,
++            "context_window_size": self.size,
++            "peak_context_used": self.peak,
++            "upstream_compaction_detected": self.suspected_compaction,
++        }
+diff --git a/agy_provider/errors.py b/agy_provider/errors.py
+index 2061fb2..fe2ee4d 100644
+--- a/agy_provider/errors.py
++++ b/agy_provider/errors.py
+@@ -14,6 +14,8 @@ class AgyError(RuntimeError):
+         retry_after: int | None = None,
+         origin_turn_id: str | None = None,
+         no_retry: bool = False,
++        no_fallback: bool = False,
++        stage: str = "",
+     ):
+         self.code = code
+         self.exit_code = exit_code if type(exit_code) is int else None
+@@ -26,6 +28,10 @@ class AgyError(RuntimeError):
+             else None
+         )
+         self.no_retry = bool(no_retry)
++        self.no_fallback = bool(no_fallback)
++        self.rpc_stage = stage if stage in {
++            "initialize", "session/new", "session/set_config_option", "session/prompt", "rpc"
++        } else "idle"
+         super().__init__(f"AGY [{code}] {message}")
+ 
+ 
+@@ -47,7 +53,7 @@ _MESSAGES = {
+         "若普通 CLI 已登录而隔离 session/new 仍失败，请检查认证桥与官方认证后端；"
+         "不要复制其他用户凭据或关闭配置隔离。"
+     ),
+-    "QUOTA": "AGY 额度不足或容量不可用，请检查官方 CLI。",
++    "QUOTA": "AGY 账号额度不足，请检查官方 CLI 的额度状态。",
+     "RATE_LIMIT": "AGY 请求受限，请稍后再试。",
+     "TIMEOUT": "AGY 上游请求超时，请检查当前网络与 CLI 状态。",
+     "UNSUPPORTED": "此 AGY 版本不支持所需 ACP 方法，请升级 CLI。",
+@@ -87,6 +93,7 @@ def classified_error(
+         retry_after=retry_after,
+         origin_turn_id=origin_turn_id,
+         no_retry=no_retry,
++        stage=stage,
+     )
+ 
+ 
+@@ -171,8 +178,11 @@ def remote_error(error: object, *, retry_notice: bool = False) -> AgyError:
+             "AUTH",
+             r"authentication.required|unauth|not.logged.in|sign.in|login|credential|\b401\b",
+         ),
+-        ("QUOTA", r"quota|exhaust|capacity|usage.limit"),
+-        ("RATE_LIMIT", r"rate.limit|too.many|\b429\b"),
++        ("QUOTA", r"quota[\s_-]+(?:exceeded|exhausted)|insufficient.credits|"
++         r"resource.{0,32}exhausted.{0,16}\(quota\)|"
++         r"(?:daily|monthly|account|subscription|billing).{0,80}(?:quota|limit|credits?).{0,40}"
++         r"(?:exceeded|exhausted|reached|depleted)"),
++        ("RATE_LIMIT", r"rate.limit|too.many|\b429\b|resource_exhausted|capacity|\b503\b"),
+         ("TIMEOUT", r"timeout|timed.out|deadline"),
+         ("UNSUPPORTED", r"-32601|method.not.found|not.supported"),
+     )
+diff --git a/agy_provider/failure_guard.py b/agy_provider/failure_guard.py
+index a4ed6f2..03b82c7 100644
+--- a/agy_provider/failure_guard.py
++++ b/agy_provider/failure_guard.py
+@@ -27,6 +27,7 @@ class _QuotaEntry:
+     expires_at: float
+     origin_turn_id: str
+     probe_in_flight: bool = False
++    code: str = "QUOTA"
+ 
+ 
+ class FailureGuard:
+@@ -102,14 +103,14 @@ class FailureGuard:
+                         remaining = max(1, math.ceil(entry.expires_at - now))
+                         return FailureCheckResult(
+                             allowed=False,
+-                            code="QUOTA",
++                            code=entry.code,
+                             origin_turn_id=entry.origin_turn_id,
+                             retry_after=remaining,
+                         )
+                     if entry.probe_in_flight:
+                         return FailureCheckResult(
+                             allowed=False,
+-                            code="QUOTA",
++                            code=entry.code,
+                             origin_turn_id=entry.origin_turn_id,
+                             retry_after=1,
+                         )
+@@ -192,7 +193,7 @@ class FailureGuard:
+     ) -> None:
+         now = self.clock()
+         self._prune(now)
+-        if code == "QUOTA" and quota_ttl > 0:
++        if code in {"QUOTA", "RATE_LIMIT"} and quota_ttl > 0:
+             cooldown = quota_ttl
+             if type(retry_after) is int and retry_after > 0:
+                 cooldown = min(MAX_QUOTA_COOLDOWN, max(quota_ttl, retry_after))
+@@ -200,6 +201,7 @@ class FailureGuard:
+                 expires_at=now + cooldown,
+                 origin_turn_id=origin_turn_id,
+                 probe_in_flight=False,
++                code=code,
+             )
+             self._quota.move_to_end(scope)
+             self._prune(now)
+diff --git a/agy_provider/host_compat.py b/agy_provider/host_compat.py
+index 19184a2..b34b38d 100644
+--- a/agy_provider/host_compat.py
++++ b/agy_provider/host_compat.py
+@@ -8,10 +8,13 @@ import asyncio
+ import copy
+ import inspect
+ import uuid
++from contextvars import ContextVar
+ from dataclasses import dataclass
+ from functools import wraps
+ from typing import Any
+ 
++from .errors import AgyError
++
+ 
+ @dataclass
+ class _Patch:
+@@ -22,9 +25,101 @@ class _Patch:
+     enabled: bool = True
+     reset_wrapper: Any = None
+     step_wrapper: Any = None
++    responses: Any = None
++    fallback: Any = None
++    responses_wrapper: Any = None
++    fallback_wrapper: Any = None
+ 
+ 
+ _patches: dict[type, _Patch] = {}
++_replay_scope: ContextVar[Any] = ContextVar("agy_replay_scope", default=None)
++
++
++def _install_replay_guard(runner_cls, state):
++    """4.29.4 catches all Exception instances even after stream output.
++
++    Keep its native fallback policy before output. After an ACP no-replay
++    failure, intercept subsequent candidates at the request boundary, so none
++    of their providers are called. Do not mutate the configured candidate list.
++    """
++    state.responses = getattr(runner_cls, "_iter_llm_responses", None)
++    state.fallback = getattr(runner_cls, "_iter_llm_responses_with_fallback", None)
++    if not callable(state.responses) or not callable(state.fallback):
++        state.logger.warning("AGY 宿主缺少 fallback 兼容接口，不能保证外部 fallback 不重放；请禁用宿主 fallback。")
++        return
++
++    @wraps(state.responses)
++    def responses_wrapper(self, *args, **kwargs):
++        scope = _replay_scope.get()
++        if not state.enabled or scope is None or scope["runner"] is not self:
++            return state.responses(self, *args, **kwargs)
++
++        async def guarded():
++            if scope["blocked"] is not None:
++                from astrbot.core.provider.entities import LLMResponse
++
++                yield LLMResponse(role="err", completion_text=str(scope["blocked"]))
++                return
++            provider = getattr(self, "provider", None)
++            source = state.responses(self, *args, **kwargs)
++            emitted = False
++            try:
++                async for response in source:
++                    emitted = emitted or bool(
++                        getattr(response, "completion_text", "")
++                        or getattr(response, "reasoning_content", "")
++                        or getattr(response, "tools_call_ids", None)
++                    )
++                    yield response
++            except AgyError as exc:
++                if _owned(provider, state) and (exc.no_fallback or emitted):
++                    exc.no_retry = True
++                    exc.no_fallback = True
++                    scope["blocked"] = exc
++                    scope["provider"] = provider
++                raise
++            finally:
++                await source.aclose()
++
++        return guarded()
++
++    @wraps(state.fallback)
++    def fallback_wrapper(self, *args, **kwargs):
++        providers = [getattr(self, "provider", None),
++                     *(getattr(self, "fallback_providers", None) or [])]
++        source = state.fallback(self, *args, **kwargs)
++        if not any(_owned(provider, state) for provider in providers):
++            return source
++
++        async def guarded():
++            scope = {"runner": self, "blocked": None, "provider": None}
++            try:
++                while True:
++                    # Set/reset around each advance, never across a yield:
++                    # hosts may advance a generator from different tasks.
++                    token = _replay_scope.set(scope)
++                    try:
++                        response = await anext(source)
++                    except StopAsyncIteration:
++                        return
++                    finally:
++                        _replay_scope.reset(token)
++                    if scope["blocked"] is not None:
++                        self.provider = scope["provider"]
++                    yield response
++            finally:
++                try:
++                    await source.aclose()
++                finally:
++                    if scope["blocked"] is not None:
++                        self.provider = scope["provider"]
++
++        return guarded()
++
++    state.responses_wrapper = responses_wrapper
++    state.fallback_wrapper = fallback_wrapper
++    runner_cls._iter_llm_responses = responses_wrapper
++    runner_cls._iter_llm_responses_with_fallback = fallback_wrapper
+ 
+ 
+ def _owned(provider, state):
+@@ -162,6 +257,7 @@ def install_host_compat(runner_cls=None, *, owner=None, logger):
+     state.reset_wrapper, state.step_wrapper = reset_wrapper, step_wrapper
+     _patches[runner_cls] = state
+     runner_cls.reset, runner_cls.step_until_done = reset_wrapper, step_wrapper
++    _install_replay_guard(runner_cls, state)
+     state.logger.info(
+         "AGY ACP 原生 runner 兼容已安装：仅本插件 provider 使用 full、独立 run 身份和结束清理。"
+     )
+@@ -185,6 +281,10 @@ def uninstall_host_compat(runner_cls=None):
+         runner_cls.reset = state.reset
+     if runner_cls.step_until_done is state.step_wrapper:
+         runner_cls.step_until_done = state.step
++    if state.responses_wrapper is not None and runner_cls._iter_llm_responses is state.responses_wrapper:
++        runner_cls._iter_llm_responses = state.responses
++    if state.fallback_wrapper is not None and runner_cls._iter_llm_responses_with_fallback is state.fallback_wrapper:
++        runner_cls._iter_llm_responses_with_fallback = state.fallback
+     state.logger.info("AGY ACP 原生 runner 兼容已停用；保留第三方后装 patch。")
+ 
+ 
+diff --git a/agy_provider/login.py b/agy_provider/login.py
+index 66a4e8a..395bee7 100644
+--- a/agy_provider/login.py
++++ b/agy_provider/login.py
+@@ -8,13 +8,14 @@ from pathlib import Path
+ from urllib.parse import urlsplit
+ 
+ from .errors import AgyError
++from .paths import windows_long_path
+ from .process import build_child_env, capture, discover, spawn, stop_process
+ 
+ 
+ class LoginFlow:
+     def __init__(self, settings, root: Path, verify):
+         self.settings = settings
+-        self.root = root
++        self.root = windows_long_path(root)
+         self.verify = verify
+         self.task = None
+         self.proc = None
+diff --git a/agy_provider/mcp_bridge.py b/agy_provider/mcp_bridge.py
+index 03132e7..7b2dd9f 100644
+--- a/agy_provider/mcp_bridge.py
++++ b/agy_provider/mcp_bridge.py
+@@ -2,23 +2,71 @@
+ 
+ import asyncio
+ import json
++import os
+ import sys
++import threading
++from concurrent.futures import TimeoutError as FutureTimeout
++
++if __package__:
++    from .bridge_transport import TOKEN_ENV, connect, read_frame
++else:
++    from bridge_transport import TOKEN_ENV, connect, read_frame
+ 
+ LIMIT = 1048576
+ 
+ 
+ async def main(path):
+-    reader = asyncio.StreamReader(limit=LIMIT)
+-    protocol = asyncio.StreamReaderProtocol(reader)
+     loop = asyncio.get_running_loop()
+-    transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
++    token = os.environ.pop(TOKEN_ENV, "")
++    transport = None
++    stopped = threading.Event()
++    if os.name == "nt":
++        # Windows inherited stdio handles need not support overlapped reads.
++        # A dedicated daemon reader avoids both Proactor pipe assumptions and
++        # shutdown_default_executor hanging on a cancelled blocking readline.
++        queue = asyncio.Queue(maxsize=16)
++
++        def pump():
++            while not stopped.is_set():
++                try:
++                    line = sys.stdin.buffer.readline(LIMIT + 1)
++                except OSError:
++                    line = b""
++                if stopped.is_set():
++                    return
++                try:
++                    future = asyncio.run_coroutine_threadsafe(queue.put(line), loop)
++                except RuntimeError:
++                    return
++                while not stopped.is_set():
++                    try:
++                        future.result(timeout=0.25)
++                        break
++                    except FutureTimeout:
++                        continue
++                    except BaseException:
++                        return
++                if stopped.is_set():
++                    future.cancel()
++                    return
++                if not line or len(line) > LIMIT:
++                    return
++
++        threading.Thread(target=pump, name="mcp:stdin", daemon=True).start()
++        readline = queue.get
++    else:
++        reader = asyncio.StreamReader(limit=LIMIT)
++        protocol = asyncio.StreamReaderProtocol(reader)
++        transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
++        readline = reader.readline
+     pending = {}
+     seen = set()
+ 
+     def send(obj):
+         obj["jsonrpc"] = "2.0"
+-        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+-        sys.stdout.flush()
++        # MCP is UTF-8 irrespective of Windows locale/PYTHONIOENCODING.
++        sys.stdout.buffer.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
++        sys.stdout.buffer.flush()
+ 
+     async def handle(request):
+         ident = request["id"]
+@@ -29,17 +77,16 @@ async def main(path):
+                 result = {
+                     "protocolVersion": "2025-11-25",
+                     "capabilities": {"tools": {}},
+-                    "serverInfo": {"name": "astrbot", "version": "0.5.2"},
++                    "serverInfo": {"name": "astrbot", "version": "0.6.0"},
+                 }
+             elif method == "ping":
+                 result = {}
+             elif method in {"tools/list", "tools/call"}:
+-                source, writer = await asyncio.open_unix_connection(
+-                    path, limit=16 * LIMIT
+-                )
+-                writer.write((json.dumps(request) + "\n").encode())
+-                await writer.drain()
+-                reply = json.loads(await source.readline())
++                async with asyncio.timeout(5):
++                    source, writer = await connect(path, request, token)
++                # Covers maximum configured host approval + execution budgets.
++                async with asyncio.timeout(2110):
++                    reply = await read_frame(source, 16 * LIMIT)
+                 send({"id": ident, **reply})
+                 return
+             else:
+@@ -51,7 +98,7 @@ async def main(path):
+                 )
+                 return
+             send({"id": ident, "result": result})
+-        except (OSError, ValueError):
++        except (OSError, ValueError, TimeoutError, RecursionError):
+             send(
+                 {
+                     "id": ident,
+@@ -61,14 +108,19 @@ async def main(path):
+         finally:
+             if writer:
+                 writer.close()
+-                await writer.wait_closed()
++                try:
++                    await asyncio.wait_for(writer.wait_closed(), 2)
++                except (OSError, TimeoutError):
++                    pass
+             pending.pop(ident, None)
+ 
+     try:
+-        while line := await reader.readline():
++        while line := await readline():
++            if len(line) > LIMIT or not line.endswith(b"\n"):
++                raise ValueError("MCP frame exceeds budget")
+             try:
+                 request = json.loads(line)
+-            except ValueError:
++            except (ValueError, RecursionError):
+                 send({"id": None, "error": {"code": -32700, "message": "Parse error"}})
+                 continue
+             if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
+@@ -76,7 +128,8 @@ async def main(path):
+             ident = request.get("id")
+             if ident is None:
+                 if request.get("method") == "notifications/cancelled":
+-                    target = (request.get("params") or {}).get("requestId")
++                    params = request.get("params")
++                    target = params.get("requestId") if isinstance(params, dict) else None
+                     if type(target) in (str, int) and target in pending:
+                         pending[target].cancel()
+                 continue  # initialized / roots/list_changed
+@@ -96,7 +149,9 @@ async def main(path):
+             seen.add(ident)
+             pending[ident] = asyncio.create_task(handle(request))
+     finally:
+-        transport.close()
++        stopped.set()
++        if transport is not None:
++            transport.close()
+         tasks = list(pending.values())
+         for task in tasks:
+             task.cancel()
+@@ -106,5 +161,5 @@ async def main(path):
+ if __name__ == "__main__":
+     try:
+         asyncio.run(main(sys.argv[1]))
+-    except (OSError, ValueError, IndexError):
++    except (OSError, ValueError, IndexError, RecursionError):
+         raise SystemExit(2) from None
+diff --git a/agy_provider/notices.py b/agy_provider/notices.py
+index 05fa1a9..65e9f40 100644
+--- a/agy_provider/notices.py
++++ b/agy_provider/notices.py
+@@ -1,10 +1,41 @@
+ """Recognize bounded standalone CLI notices across streaming chunks."""
+ 
+ import re
++from enum import Enum
+ 
+ from .errors import classified_error, remote_error
+ 
+ 
++class UpstreamState(str, Enum):
++    UNKNOWN = "UNKNOWN"
++    ACCOUNT_QUOTA_EXHAUSTED = "ACCOUNT_QUOTA_EXHAUSTED"
++    RATE_LIMIT_OR_CAPACITY = "RATE_LIMIT_OR_CAPACITY"
++    TRANSIENT_RETRY = "TRANSIENT_RETRY"
++    AUTH_FATAL = "AUTH_FATAL"
++    AGENT_FATAL = "AGENT_FATAL"
++
++
++def classify_notice(text: str) -> UpstreamState:
++    """Only call on bounded CLI diagnostic envelopes, never answer prose."""
++    text = text.lower()
++    if re.search(
++        r"(?:daily|monthly|account|subscription|billing)[\s\S]{0,80}"
++        r"(?:quota|limit|credits?)[\s\S]{0,40}(?:exceeded|exhausted|reached|depleted)\b|"
++        r"\bquota[\s_-]+(?:exceeded|exhausted)\b|\binsufficient credits\b", text
++    ):
++        return UpstreamState.ACCOUNT_QUOTA_EXHAUSTED
++    if re.search(r"\b401\b|\bunauthenticated\b|\binvalid (?:credentials?|token)\b|"
++                 r"\bauthentication required\b|\btoken (?:has )?expired\b", text):
++        return UpstreamState.AUTH_FATAL
++    if re.search(r"\b429\b|\bresource_exhausted\b|\btoo many requests\b", text):
++        return UpstreamState.RATE_LIMIT_OR_CAPACITY
++    if re.search(r"\b503\b|\bunavailable\b|\bno capacity\b", text):
++        return UpstreamState.TRANSIENT_RETRY
++    if "agent execution terminated due to error." in text:
++        return UpstreamState.AGENT_FATAL
++    return UpstreamState.UNKNOWN
++
++
+ class RetryNoticeGuard:
+     """Discard complete CLI retry and stream-interrupt notices before streaming."""
+ 
+@@ -39,6 +70,12 @@ class RetryNoticeGuard:
+         self.diagnostic = ""
+         self._notice_diagnostic = ""
+         self.error_code = ""
++        self.state = UpstreamState.UNKNOWN
++        self.fast_fail_code = ""
++        self.rate_limit_notices = 0
++        self._rate_counted = False
++        self._attempt = ""
++        self._last_rate_attempt = None
+ 
+     def _possible(self, text):
+         for head in self.heads:
+@@ -71,6 +108,20 @@ class RetryNoticeGuard:
+             self.error_code = remote_error(
+                 self._notice_diagnostic, retry_notice=True
+             ).code
++            self.state = classify_notice(self._notice_diagnostic)
++            if self.state == UpstreamState.ACCOUNT_QUOTA_EXHAUSTED:
++                self.fast_fail_code = "QUOTA"
++            elif self.state == UpstreamState.AUTH_FATAL:
++                self.fast_fail_code = "AUTH"
++            elif self.state == UpstreamState.RATE_LIMIT_OR_CAPACITY:
++                if not self._rate_counted and self._attempt != self._last_rate_attempt:
++                    self.rate_limit_notices += 1
++                    self._rate_counted = True
++                    self._last_rate_attempt = self._attempt
++                if self.rate_limit_notices >= 2:
++                    self.fast_fail_code = "RATE_LIMIT"
++            elif self.state == UpstreamState.TRANSIENT_RETRY:
++                self.rate_limit_notices = 0
+ 
+     def _end_continuation(self):
+         self.continuing = False
+@@ -79,6 +130,9 @@ class RetryNoticeGuard:
+ 
+     def _start_notice(self, candidate, *, can_continue):
+         self._end_continuation()
++        self._rate_counted = False
++        match = re.match(r"^⚠\ufe0f? API error \(attempt ([0-9]+)\):", candidate)
++        self._attempt = match[1] if match else ""
+         self.diagnostic = ""
+         self._can_continue = can_continue
+         self._append_diagnostic(candidate)
+@@ -109,6 +163,8 @@ class RetryNoticeGuard:
+             self.dropping = True
+ 
+     def _emit(self, output, chunk):
++        if chunk.strip():
++            self.rate_limit_notices = 0
+         if self.leading_blanks:
+             output.append(self.leading_blanks)
+             self.leading_blanks = ""
+diff --git a/agy_provider/onboarding.py b/agy_provider/onboarding.py
+index cd4af72..6753e1e 100644
+--- a/agy_provider/onboarding.py
++++ b/agy_provider/onboarding.py
+@@ -45,6 +45,8 @@ HINTS = {
+ 
+ def next_step(report):
+     if report.get("status") == "passed":
++        if report.get("minimal_tools_status") == "unsupported":
++            return "聊天检查通过，但当前 CLI 不支持工具组件精简。请恢复 agy_customizations_mode=inherit；工具模式尚未验收。"
+         return "环境与模型目录检查通过。选择模型并保存即可配置；此检查没有发送对话。"
+     return HINTS.get(report.get("error_code"), "请重新检测；仍失败时用 /agy doctor 获取脱敏诊断。")
+ 
+@@ -61,7 +63,7 @@ def environment(settings=None):
+             if os.name == "nt" else
+             "当前默认搜索范围：AstrBot 进程的 PATH、~/.local/bin/agy。"
+         ),
+-        "install_url": "https://antigravity.google/docs/getting-started",
++        "install_url": "https://antigravity.google/docs/cli/tutorial",
+         "install_command": "irm https://antigravity.google/cli/install.ps1 | iex" if os.name == "nt" else "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+         "install_hint": (
+             "请在容器内部、以 AstrBot 的运行用户安装并登录 CLI；持久保存官方认证目录。宿主机安装不等于容器可用。"
+@@ -69,7 +71,7 @@ def environment(settings=None):
+             "Windows：安装官方原生 agy.exe。自动搜索 PATH、%LOCALAPPDATA%\\agy\\bin 和用户 .local\\bin。"
+             if os.name == "nt" else
+             "Linux / macOS：按官方 CLI 安装指引操作。自动搜索 PATH 和 ~/.local/bin/agy；系统服务须使用同一运行用户。"
+-        ),
++        ) + " 更新前请停止活跃对话、备份原 CLI，再按官方指引手动更新；失败时恢复旧文件并重载插件。插件不检查远程最新版、不覆盖全局 CLI。",
+     }
+ 
+ 
+diff --git a/agy_provider/paths.py b/agy_provider/paths.py
+index eb33c10..3c15ffc 100644
+--- a/agy_provider/paths.py
++++ b/agy_provider/paths.py
+@@ -1,8 +1,25 @@
+-"""Shared authorized session data root for Runtime and no-generation doctor."""
++"""Shared authorized session data root and Windows filesystem paths."""
+ 
++import os
+ from pathlib import Path
+ 
+ 
++def windows_long_path(path: Path) -> Path:
++    """Use extended-length absolute paths on Windows, without resolving links."""
++    if os.name != "nt":
++        return path
++    value = os.fspath(path)
++    if value.startswith(("\\\\?\\", "\\\\.\\")):
++        return path
++    # Normalize relative paths, separators and dot components before adding the
++    # prefix: Win32 skips that normalization for extended-length paths. Prefix
++    # even short roots, since their session files may grow beyond MAX_PATH.
++    value = os.path.abspath(value)
++    if value.startswith("\\\\"):
++        return Path("\\\\?\\UNC\\" + value[2:])
++    return Path("\\\\?\\" + value)
++
++
+ def plugin_data_root(base: Path | None = None) -> Path:
+     if base is None:
+         try:
+diff --git a/agy_provider/probe.py b/agy_provider/probe.py
+index 886654c..7087037 100644
+--- a/agy_provider/probe.py
++++ b/agy_provider/probe.py
+@@ -3,6 +3,7 @@
+ import argparse
+ import asyncio
+ import json
++import os
+ import re
+ import tempfile
+ from pathlib import Path
+@@ -10,7 +11,7 @@ from pathlib import Path
+ from .config import Settings
+ from .errors import AgyError
+ from .models import catalog_names, choices, find_option, options, select
+-from .paths import plugin_data_root
++from .paths import plugin_data_root, windows_long_path
+ from .process import discover, launch_args, make_home
+ from .transport import AcpClient
+ 
+@@ -48,6 +49,10 @@ async def probe(
+         "model_prompt_sent": False,
+         "mcp_loading": "not_tested",
+         "host_tool_loop": "not_tested",
++        "cli_update_status": "not_checked",
++        "cli_update_policy": "manual_external",
++        "tool_bridge_transport": "loopback_hmac" if os.name == "nt" else "unix_socket" if os.name == "posix" else "unsupported",
++        "customizations_mode": settings.agy_customizations_mode,
+     }
+     try:
+         async with asyncio.timeout(settings.startup_timeout):
+@@ -81,8 +86,16 @@ async def _run_probe(
+         re.IGNORECASE,
+     )
+     report["cli_version"] = version[1] if version else "unrecognized"
++    report["cli_flags"] = {
++        "disable_telemetry": info.disable_telemetry,
++        "include_default_customizations": info.include_default_customizations,
++    }
++    report["minimal_tools_status"] = (
++        "inactive" if settings.agy_customizations_mode == "inherit" else
++        "flag_available_unverified" if info.include_default_customizations else "unsupported"
++    )
+     stage("isolation")
+-    root = root if root is not None else plugin_data_root()
++    root = windows_long_path(root if root is not None else plugin_data_root())
+     root.mkdir(parents=True, exist_ok=True, mode=0o700)
+     with tempfile.TemporaryDirectory(prefix="preflight-", dir=root) as directory:
+         stage("authentication")
+@@ -93,6 +106,10 @@ async def _run_probe(
+         try:
+             stage("initialize")
+             await client.start(launch_args(info, home), home / "workspace")
++            report["process_supervision"] = (
++                "windows_job" if getattr(client.proc, "_agy_job", None) is not None
++                else "windows_taskkill_fallback" if os.name == "nt" else "posix_process_group"
++            )
+             report["protocol_version"] = 1
+             report["advertised_capabilities"] = capability_summary(client.capabilities)
+             stage("session/new")
+diff --git a/agy_provider/process.py b/agy_provider/process.py
+index 6b66d80..9a31f94 100644
+--- a/agy_provider/process.py
++++ b/agy_provider/process.py
+@@ -12,6 +12,8 @@ from pathlib import Path
+ from .auth import bridge_auth
+ from .config import Settings
+ from .errors import AgyError, remote_error
++from .paths import windows_long_path
++from .windows_job import WindowsJob
+ 
+ AGENT_NAME = "astrbot-chat"
+ 
+@@ -41,8 +43,8 @@ def build_child_env(settings: Settings) -> dict[str, str]:
+ async def spawn(
+     argv: list[str], cwd: Path | None = None, *, env: dict[str, str] | None = None
+ ):
+-    task = asyncio.create_task(
+-        asyncio.create_subprocess_exec(
++    async def create_owned():
++        proc = await asyncio.create_subprocess_exec(
+             *argv,
+             cwd=cwd,
+             env=env,
+@@ -53,17 +55,33 @@ async def spawn(
+             start_new_session=os.name == "posix",
+             **({"creationflags": 0x08000000} if os.name == "nt" else {}),
+         )
+-    )
++        if os.name == "nt":
++            try:
++                proc._agy_job = WindowsJob.attach(proc.pid)
++            except (OSError, AttributeError):
++                proc._agy_job = None
++        return proc
++
++    task = asyncio.create_task(create_owned())
+     try:
+         return await asyncio.shield(task)
+     except asyncio.CancelledError:
+         # Subprocess creation may complete after cancellation. Reap that child.
+-        try:
+-            proc = await task
+-        except (OSError, NotImplementedError):
+-            pass
+-        else:
+-            await stop_process(proc)
++        # Repeated cancellation must not abandon an in-flight spawn either.
++        while not task.done():
++            try:
++                await asyncio.shield(task)
++            except asyncio.CancelledError:
++                continue
++            except (OSError, AgyError, NotImplementedError):
++                break
++        if not task.cancelled():
++            try:
++                proc = task.result()
++            except (OSError, AgyError, NotImplementedError):
++                pass
++            else:
++                await stop_process(proc)
+         raise
+     except PermissionError:
+         raise AgyError(
+@@ -92,7 +110,10 @@ async def stop_process(proc: asyncio.subprocess.Process) -> None:
+     # Shield the *entire* shutdown, including Windows taskkill, and keep owning it
+     # until it finishes. A lone shield would leave background cleanup behind;
+     # an unshielded second await would let a repeated cancel interrupt SIGKILL.
+-    cleanup = asyncio.create_task(_stop_process(proc), name="agy:stop-process")
++    cleanup = getattr(proc, "_agy_stop_task", None)
++    if cleanup is None:
++        cleanup = asyncio.create_task(_stop_process(proc), name="agy:stop-process")
++        proc._agy_stop_task = cleanup
+     cancelled = None
+     while True:
+         try:
+@@ -109,13 +130,18 @@ async def stop_process(proc: asyncio.subprocess.Process) -> None:
+ 
+ 
+ async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+-    # Own process group only. Windows uses taskkill /T for descendants.
++    # Closing a job also kills descendants after the front process exited.
++    job = getattr(proc, "_agy_job", None)
++    if job is not None:
++        await job.stop()
++        proc._agy_job = None
++    # Own process group only. Windows retains taskkill /T as a fallback.
+     if os.name == "posix":
+         try:
+             os.killpg(proc.pid, signal.SIGTERM)
+         except ProcessLookupError:
+             pass
+-    elif proc.returncode is None:
++    elif proc.returncode is None and job is None:
+         try:
+             killer = await asyncio.create_subprocess_exec(
+                 "taskkill",
+@@ -158,8 +184,22 @@ async def capture(
+     argv: list[str], timeout: int, *, env: dict[str, str] | None = None
+ ) -> str:
+     proc = await spawn(argv, env=env)
++    async def bounded_read(reader):
++        output = bytearray()
++        while chunk := await reader.read(8192):
++            output.extend(chunk)
++            if len(output) > 65536:
++                raise AgyError("OUTPUT_LIMIT", "AGY 版本/帮助输出超过 64 KiB。")
++        return bytes(output)
++
++    readers = [asyncio.create_task(bounded_read(proc.stdout)),
++               asyncio.create_task(bounded_read(proc.stderr))]
+     try:
+-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
++        if proc.stdin:
++            proc.stdin.close()
++        async with asyncio.timeout(timeout):
++            out, err = await asyncio.gather(*readers)
++            await proc.wait()
+         if proc.returncode:
+             error = remote_error(err.decode("utf-8", "replace"))
+             error.exit_code = proc.returncode
+@@ -168,7 +208,12 @@ async def capture(
+     except TimeoutError:
+         raise AgyError("TIMEOUT", "AGY 版本/能力检查超时。") from None
+     finally:
+-        await stop_process(proc)
++        try:
++            await stop_process(proc)
++        finally:
++            for reader in readers:
++                reader.cancel()
++            await asyncio.gather(*readers, return_exceptions=True)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -176,6 +221,7 @@ class LaunchInfo:
+     binary: str
+     version: str
+     disable_telemetry: bool
++    include_default_customizations: bool = False
+ 
+ 
+ async def discover(settings: Settings) -> LaunchInfo:
+@@ -217,7 +263,10 @@ async def discover(settings: Settings) -> LaunchInfo:
+         [binary, "acp", "--help"], settings.startup_timeout, env=env
+     )
+     required = ("--gemini-dir", "--app-data-dir", "--agent")
+-    if any(flag not in help_text for flag in required):
++    if any(flag not in help_text for flag in required) or (
++        settings.agy_customizations_mode == "minimal"
++        and "--include-default-customizations" not in help_text
++    ):
+         # Some releases list inherited flags only in the global help.
+         help_text += await capture(
+             [binary, "--help"], settings.startup_timeout, env=env
+@@ -229,6 +278,7 @@ async def discover(settings: Settings) -> LaunchInfo:
+         binary,
+         version.strip().splitlines()[0][:120] if version.strip() else "unknown",
+         "--disable-telemetry" in help_text,
++        "--include-default-customizations" in help_text,
+     )
+ 
+ 
+@@ -256,6 +306,7 @@ def make_home(
+     *,
+     settings: Settings | None = None,
+ ) -> Path:
++    root = windows_long_path(root)
+     root.mkdir(parents=True, exist_ok=True, mode=0o700)
+     home = Path(tempfile.mkdtemp(prefix="session-", dir=root))
+     try:
+@@ -302,7 +353,8 @@ def make_home(
+ 
+ 
+ def launch_args(
+-    info: LaunchInfo, home: Path, use_default_agent: bool = False
++    info: LaunchInfo, home: Path, use_default_agent: bool = False,
++    *, customizations_mode: str = "inherit",
+ ) -> list[str]:
+     args = [
+         info.binary,
+@@ -314,6 +366,10 @@ def launch_args(
+     ]
+     if not use_default_agent:
+         args.extend(["--agent", AGENT_NAME])
++    elif customizations_mode == "minimal":
++        if not info.include_default_customizations:
++            raise AgyError("UNSUPPORTED", "CLI 不支持组件精简参数；请恢复 agy_customizations_mode=inherit。")
++        args.append("--include-default-customizations=false")
+     if info.disable_telemetry:
+         args.append("--disable-telemetry")
+     return args
+diff --git a/agy_provider/provider.py b/agy_provider/provider.py
+index 45407f1..b37f6ae 100644
+--- a/agy_provider/provider.py
++++ b/agy_provider/provider.py
+@@ -471,6 +471,9 @@ class AgyProvider(Provider):
+                 claimed_half_open = guard_check.half_open_scope
+         except BaseException as exc:
+             self.runtime.failure_guard.release_probe(claimed_half_open)
++            if isinstance(exc, AgyError) and meter is not None and meter.tool_calls:
++                exc.no_retry = True
++                exc.no_fallback = True
+             cancelled = isinstance(exc, asyncio.CancelledError)
+             code = exc.code if isinstance(exc, AgyError) else ("CANCELLED" if cancelled else "CONFIG")
+             if meter is None:
+@@ -481,7 +484,7 @@ class AgyProvider(Provider):
+                     model=selected,
+                     effort=effort if isinstance(effort, str) else "default",
+                 )
+-            if not (isinstance(exc, AgyError) and exc.no_retry):
++            if not meter.finished:
+                 meter.finish(
+                     status="cancelled" if cancelled else "error", error_code=code
+                 )
+@@ -580,9 +583,19 @@ class AgyProvider(Provider):
+             elif isinstance(exc, AgyError):
+                 exit_status = "error"
+                 exit_code = exc.code
++                # Surface an explicit failure after partial delivery. Neither
++                # this provider nor callers honoring no_retry may replay it.
++                if text_parts or thoughts or handed_off or meter.tool_calls:
++                    exc.no_retry = True
++                    exc.no_fallback = True
+             else:
+                 exit_status = "error"
+                 exit_code = "UPSTREAM"
++                if isinstance(exc, Exception) and (text_parts or thoughts or handed_off or meter.tool_calls):
++                    raise AgyError(
++                        "UPSTREAM", "本轮已输出内容或交接工具后失败；已停止，禁止自动重放。",
++                        no_retry=True, no_fallback=True,
++                    ) from None
+             raise
+         finally:
+             await events.aclose()
+diff --git a/agy_provider/sessions.py b/agy_provider/sessions.py
+index 8d5c9fb..ec089ac 100644
+--- a/agy_provider/sessions.py
++++ b/agy_provider/sessions.py
+@@ -23,6 +23,7 @@ from .messages import (
+     prompt_blocks,
+ )
+ from .models import catalog, select
++from .paths import windows_long_path
+ from .process import LaunchInfo, discover, launch_args, make_home
+ from .telemetry import TelemetryTracker, TurnMeter
+ from .tools import ToolBroker, ToolSnapshot
+@@ -261,7 +262,7 @@ class Session:
+ class Runtime:
+     def __init__(self, settings: Settings, root: Path, *, clock=time.monotonic):
+         self.settings = settings
+-        self.root = root / ("runtime-" + uuid.uuid4().hex)
++        self.root = windows_long_path(root / ("runtime-" + uuid.uuid4().hex))
+         self.sessions: dict[str, Session] = {}
+         self.key_locks: dict[str, tuple[asyncio.Lock, int]] = {}
+         self.pool_lock = asyncio.Lock()
+@@ -408,6 +409,7 @@ class Runtime:
+                     info,
+                     session.home,
+                     use_default_agent=bool(snapshot and snapshot.tools),
++                    customizations_mode=self.settings.agy_customizations_mode,
+                 ),
+                 session.home / "workspace",
+             )
+@@ -477,6 +479,7 @@ class Runtime:
+             completed = False
+             failure_exc: BaseException | None = None
+             cancelled = False
++            generation_started = False
+             try:
+                 if not continuation and provider_id:
+                     check = await self.failure_guard.check_empty_only(
+@@ -511,6 +514,10 @@ class Runtime:
+                     temporary=temporary,
+                     tombstone=tombstone,
+                 )
++                local_meter.set_decision(
++                    reused=decision.reuse, reasons=decision.reasons,
++                    history_relation=decision.history_relation,
++                )
+                 context = request.prompt_context
+                 if decision.reuse:
+                     turn_index = session.turn_counter + 1
+@@ -583,10 +590,14 @@ class Runtime:
+                     session.broker.notifications.clear()
+                     session.broker.error = None
+                 text_parts = []
+-                local_meter.request_sent = True
++                # Reset before a reused client's next turn, including errors
++                # before its async generator starts writing the prompt.
++                session.client.prompt_sent = False
++                generation_started = True
+                 turn = tool_events(session.client, prompt, session.broker)
+                 try:
+                     async for event in turn:
++                        local_meter.observe_client(session.client)
+                         if event.kind == "usage":
+                             payload = event.result or {}
+                             local_meter.observe_usage(
+@@ -621,8 +632,8 @@ class Runtime:
+                                         stripped_notices,
+                                     )
+                                     raise AgyError(
+-                                        "QUOTA",
+-                                        "AGY 额度不足或容量不可用，请检查官方 CLI。",
++                                        "RATE_LIMIT",
++                                        "AGY 上游容量不可用，请稍后重试。",
+                                     )
+                                 raise AgyError("EMPTY", "AGY 没有返回正文。")
+                             if stripped_notices:
+@@ -669,14 +680,24 @@ class Runtime:
+                 raise
+             except BaseException as exc:
+                 failure_exc = exc
++                if isinstance(exc, AgyError) and exc.rpc_stage != "idle":
++                    local_meter.rpc_stage = exc.rpc_stage
+                 raise
+             finally:
++                if generation_started:
++                    local_meter.observe_client(session.client)
+                 # Partial/cancelled turns never become a reusable history prefix.
+-                short_circuited = isinstance(failure_exc, AgyError) and failure_exc.no_retry
++                short_circuited = (
++                    isinstance(failure_exc, AgyError) and failure_exc.no_retry
++                    and not local_meter.request_sent
++                )
+                 if short_circuited:
+                     self.failure_guard.release_probe(claimed_half_open)
+                 elif not completed:
+-                    latest_usage = getattr(session.client, "latest_usage", None)
++                    latest_usage = (
++                        getattr(session.client, "latest_usage", None)
++                        if generation_started and local_meter.request_sent else None
++                    )
+                     if latest_usage is not None:
+                         latest_source = (
+                             getattr(session.client, "latest_usage_source", None)
+@@ -724,6 +745,12 @@ class Runtime:
+                         error_code=error_code,
+                     )
+                     await session.close()
++                elif local_meter.context["upstream_compaction_detected"]:
++                    # Delivery/host tool continuations have reached a terminal
++                    # state. Never retire midway through a tool side effect.
++                    if not temporary and not self.stopped:
++                        self.telemetry.record_eviction(key, "upstream_compaction_detected")
++                    await session.close()
+ 
+     async def _sweep(self) -> None:
+         try:
+diff --git a/agy_provider/telemetry.py b/agy_provider/telemetry.py
+index c30971f..e1cf068 100644
+--- a/agy_provider/telemetry.py
++++ b/agy_provider/telemetry.py
+@@ -18,11 +18,13 @@ from astrbot.api import logger
+ MAX_HISTORY_TURNS = 100
+ MAX_TOMBSTONES = 1024
+ TOMBSTONE_TTL_SECONDS = 3600
++HISTORY_TTL_SECONDS = 86400
+ 
+ REBUILD_REASON_PRIORITY = (
+     "no_identity",
+     "abort",
+     "previous_error",
++    "upstream_compaction_detected",
+     "process_dead",
+     "idle_expired",
+     "pool_evicted",
+@@ -62,7 +64,7 @@ def _valid_nonneg_int(value: object) -> int | None:
+ 
+ def extract_acp_usage(
+     payload: object,
+-) -> tuple[dict[str, int] | None, dict[str, bool]]:
++) -> tuple[dict[str, int | None] | None, dict[str, bool]]:
+     """Extract allowlisted camelCase ACP usage buckets without summing updates."""
+     raw = payload.get("usage") if isinstance(payload, dict) else None
+     if not isinstance(raw, dict):
+@@ -81,7 +83,7 @@ def extract_acp_usage(
+     return (
+         {
+             "input_other": uncached + (cached_write or 0),
+-            "input_cached": cached_read or 0,
++            "input_cached": cached_read,
+             "output": output,
+         },
+         cache_fields_present,
+@@ -121,7 +123,7 @@ class TurnMeter:
+         self._clock = tracker.clock
+         self._started_at = self._clock()
+         self._finished = False
+-        self._usage: dict[str, int] | None = None
++        self._usage: dict[str, int | None] | None = None
+         self._usage_source: str | None = None
+         self._cache_fields_present: dict[str, bool] = {
+             "cachedReadTokens": False,
+@@ -149,6 +151,27 @@ class TurnMeter:
+         self.estimate_method: str = estimate_method
+         self.tool_calls: int = 0
+         self.request_sent: bool = False
++        self.rpc_stage = "idle"
++        self.fast_abort_reason: str | None = None
++        self.context = {
++            "context_used": None, "context_window_size": None,
++            "peak_context_used": None, "upstream_compaction_detected": False,
++        }
++
++    def observe_client(self, client) -> None:
++        if client is None:
++            return
++        self.request_sent = self.request_sent or getattr(client, "prompt_sent", False)
++        stage = getattr(client, "stage", "idle")
++        self.rpc_stage = stage if stage in {
++            "idle", "initialize", "session/new", "session/set_config_option", "session/prompt", "rpc"
++        } else "rpc"
++        context = getattr(client, "context_usage", None)
++        if context is not None:
++            self.context = context.summary()
++        retries = getattr(getattr(client, "text_guard", None), "retries", None)
++        code = getattr(retries, "fast_fail_code", "")
++        self.fast_abort_reason = code if code in {"QUOTA", "RATE_LIMIT", "AUTH"} else None
+ 
+     def set_decision(
+         self,
+@@ -252,6 +275,9 @@ class TurnMeter:
+             "estimate_method": self.estimate_method,
+             "tool_calls": self.tool_calls,
+             "request_sent": self.request_sent,
++            "rpc_stage": self.rpc_stage,
++            "fast_abort_reason": self.fast_abort_reason,
++            **self.context,
+             "elapsed_ms": elapsed_ms,
+             "status": status,
+             "error_code": error_code if isinstance(error_code, str) and error_code else None,
+@@ -266,7 +292,7 @@ class TelemetryTracker:
+     def __init__(
+         self,
+         *,
+-        cost_log_enabled: bool = True,
++        cost_log_enabled: bool = False,
+         clock: Callable[[], float] = time.monotonic,
+         secret: bytes | None = None,
+     ):
+@@ -274,9 +300,11 @@ class TelemetryTracker:
+         self.clock = clock
+         self._secret = secret if secret is not None else secrets.token_bytes(32)
+         self.history: deque[dict] = deque(maxlen=MAX_HISTORY_TURNS)
++        self._history_times: deque[float] = deque(maxlen=MAX_HISTORY_TURNS)
+         self.tombstones: OrderedDict[str, _Tombstone] = OrderedDict()
+         self.evictions: dict[str, int] = {}
+         self.emitted_lines: deque[str] = deque(maxlen=MAX_HISTORY_TURNS)
++        self._emitted_times: deque[float] = deque(maxlen=MAX_HISTORY_TURNS)
+ 
+     def opaque_tag(self, value: str | None) -> str | None:
+         if not value:
+@@ -312,12 +340,23 @@ class TelemetryTracker:
+         )
+ 
+     def record_turn(self, record: dict) -> None:
++        self._prune_history()
+         self.history.append(record)
++        self._history_times.append(self.clock())
+         if self.cost_log_enabled:
+             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+             self.emitted_lines.append(line)
++            self._emitted_times.append(self.clock())
+             _emit_json_line(line)
+ 
++    def _prune_history(self) -> None:
++        cutoff = self.clock() - HISTORY_TTL_SECONDS
++        for times, records in ((self._history_times, self.history),
++                               (self._emitted_times, self.emitted_lines)):
++            while times and times[0] <= cutoff:
++                times.popleft()
++                records.popleft()
++
+     def _prune_tombstones(self, now: float) -> None:
+         expired = [
+             key
+@@ -362,6 +401,7 @@ class TelemetryTracker:
+         return item.reason
+ 
+     def summarize(self) -> dict:
++        self._prune_history()
+         turns = list(self.history)
+         total = len(turns)
+         sent_turns = [t for t in turns if t["request_sent"]]
+@@ -409,7 +449,28 @@ class TelemetryTracker:
+             reason_counts.items(), key=lambda pair: (-pair[1], pair[0])
+         )
+ 
++        groups = {}
++        for turn in turns:
++            key = (turn["mode"], turn["model"], turn["status"],
++                   "not_sent" if not turn["request_sent"] else "warm" if turn["reused"] else "cold")
++            group = groups.setdefault(key, {
++                "mode": key[0], "model": key[1], "status": key[2], "session": key[3],
++                "turns": 0, "reported": 0, "unknown": 0, "cached_read_unknown": 0,
++                "input_other": 0, "input_cached": 0, "output": 0,
++            })
++            group["turns"] += 1
++            if turn["usage_status"] == "reported":
++                group["reported"] += 1
++                group["cached_read_unknown"] += not turn["cache_fields_present"]["cachedReadTokens"]
++                for bucket in ("input_other", "input_cached", "output"):
++                    group[bucket] += turn[bucket] or 0
++            elif turn["request_sent"]:
++                group["unknown"] += 1
++
+         return {
++            "groups": list(groups.values()),
++            "compaction_turns": sum(bool(t.get("upstream_compaction_detected")) for t in turns),
++            "fast_abort_turns": sum(bool(t.get("fast_abort_reason")) for t in turns),
+             "total_turns": total,
+             "request_sent_turns": len(sent_turns),
+             "short_circuited_turns": short_circuited,
+@@ -463,12 +524,12 @@ def _pct(value: float | None) -> str:
+ def format_cost_report(instances: list[dict], settings_summary: dict) -> str:
+     """Format a read-only /agy cost report across active provider instances."""
+     lines = [
+-        "AGY 成本与会话复用统计（只读，未发送模型请求；每实例保留最近 100 轮）",
++        "AGY 成本与会话复用统计（只读，未发送模型请求；每实例保留 24 小时内最近 100 轮）",
+         "全局有效配置："
+         f"reuse={settings_summary.get('session_reuse_mode', 'strict')} · "
+         f"history_bytes={settings_summary.get('history_bytes', 160000)} · "
+         f"enable_tools={settings_summary.get('enable_tools', False)} · "
+-        f"cost_log={settings_summary.get('cost_log_enabled', True)} · "
++        f"cost_log={settings_summary.get('cost_log_enabled', False)} · "
+         f"empty_ttl={settings_summary.get('empty_dedupe_ttl', 30)}s · "
+         f"quota_cooldown={settings_summary.get('quota_cooldown', 60)}s",
+     ]
+@@ -539,5 +600,18 @@ def format_cost_report(instances: list[dict], settings_summary: dict) -> str:
+                 f"{reason}={count}"
+                 for reason, count in sorted(summary["evictions"].items())
+             )
+-            lines.append(f"  会话回收次数：{ev}")
++            lines.append(f"  会话回收次数（启动以来）：{ev}")
++        lines.append(
++            f"  疑似上下文压缩={summary.get('compaction_turns', 0)} · "
++            f"强错误快速中断={summary.get('fast_abort_turns', 0)}（上下文占用不计作计费 Token）"
++        )
++        for group in summary.get("groups", [])[:20]:
++            lines.append(
++                f"  分组 {group['mode']}/{group['model']}/{group['status']}/{group['session']}："
++                f"{group['turns']} 轮，reported={group['reported']}，unknown={group['unknown']}，"
++                f"input_other={group['input_other']}，已知 input_cached={group['input_cached']}"
++                f"（缓存读取未知 {group['cached_read_unknown']} 轮），output={group['output']}"
++            )
++        if len(summary.get("groups", [])) > 20:
++            lines.append("  分组仅显示前 20 项；上述总计包含全部样本。")
+     return "\n".join(lines)
+diff --git a/agy_provider/tools.py b/agy_provider/tools.py
+index 684194b..4abbc28 100644
+--- a/agy_provider/tools.py
++++ b/agy_provider/tools.py
+@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
+ from pathlib import Path
+ 
+ from .config import Settings
++from .bridge_transport import BridgeTransport, TOKEN_ENV
+ from .errors import AgyError
+ from .messages import digest
+ 
+@@ -338,6 +339,7 @@ class ToolBroker:
+     def __init__(self, snapshot: ToolSnapshot, settings: Settings):
+         self.snapshot, self.settings = snapshot, settings
+         self.session_id = None
++        self.turn_active = False
+         self.pending: dict[str, PendingCall] = {}
+         self.audit: dict[str, str] = {}
+         self.seen = set()
+@@ -353,6 +355,7 @@ class ToolBroker:
+         self.error = None
+         self.close_task = None
+         self.audit_sink = None
++        self.transport = BridgeTransport(tcp=os.name == "nt")
+ 
+     def record_outcome(self, call):
+         self.audit[call.id] = call.state
+@@ -360,37 +363,43 @@ class ToolBroker:
+             self.audit_sink(call.id, call.state)
+ 
+     async def start(self):
+-        if os.name != "posix":
+-            raise AgyError("UNSUPPORTED", "当前工具桥需要 Unix domain socket。")
+-        self.directory = Path(tempfile.mkdtemp(prefix="agy-mcp-"))
+-        self.path = self.directory / "bridge.sock"
++        if os.name not in {"posix", "nt"}:
++            raise AgyError("UNSUPPORTED", "当前平台没有可用的本地工具桥。")
+         try:
+-            self.server = await asyncio.start_unix_server(
+-                self._connection, path=self.path, limit=FRAME_LIMIT
+-            )
+-            self.path.chmod(0o600)
++            if self.transport.tcp:
++                self.server = await asyncio.start_server(
++                    self._connection, host="127.0.0.1", port=0, limit=FRAME_LIMIT,
++                )
++                endpoint = f"tcp:{self.server.sockets[0].getsockname()[1]}"
++            else:
++                self.directory = Path(tempfile.mkdtemp(prefix="agy-mcp-"))
++                self.path = self.directory / "bridge.sock"
++                self.server = await asyncio.start_unix_server(
++                    self._connection, path=self.path, limit=FRAME_LIMIT
++                )
++                self.path.chmod(0o600)
++                endpoint = str(self.path)
+         except BaseException:
+-            shutil.rmtree(self.directory, ignore_errors=True)
++            await self.close()
+             raise
+         return {
+             "name": SERVER_NAME,
+             "type": "stdio",
+             "command": sys.executable,
+-            "args": [str(Path(__file__).with_name("mcp_bridge.py")), str(self.path)],
+-            "env": {},
++            "args": [str(Path(__file__).with_name("mcp_bridge.py")), endpoint],
++            "env": {TOKEN_ENV: self.transport.token} if self.transport.tcp else {},
+         }
+ 
+     async def _connection(self, reader, writer):
+         task = asyncio.current_task()
+-        if len(self.tasks) >= self.settings.tool_max_concurrent + 4:
++        if self.closed or len(self.tasks) >= self.settings.tool_max_concurrent + 4:
+             writer.close()
+             return
+         self.tasks.add(task)
+         work = eof = None
+         try:
+             async with asyncio.timeout(self.settings.tool_approval_timeout):
+-                line = await reader.readline()
+-                request = json.loads(line, parse_constant=reject_constant)
++                request = await self.transport.receive(reader, writer)
+             work = asyncio.create_task(self.dispatch(request))
+             eof = asyncio.create_task(reader.read(1))
+             await asyncio.wait((work, eof), return_when=asyncio.FIRST_COMPLETED)
+@@ -401,7 +410,7 @@ class ToolBroker:
+                     reply = {"error": {"code": -32001, "message": exc.code}}
+                 writer.write((json.dumps(reply, ensure_ascii=False) + "\n").encode())
+                 await asyncio.wait_for(writer.drain(), 2)
+-        except (ValueError, OSError, TimeoutError, asyncio.LimitOverrunError):
++        except (ValueError, OSError, TimeoutError, RecursionError, asyncio.LimitOverrunError):
+             pass
+         finally:
+             try:
+@@ -428,6 +437,8 @@ class ToolBroker:
+             return {"tools": self.snapshot.tools}
+         if request.get("method") != "tools/call":
+             raise AgyError("TOOL_PROTOCOL", "未知工具请求。")
++        if not self.turn_active:
++            raise AgyError("TOOL_STALE", "当前没有活跃工具轮，拒绝过期调用。")
+         params = request.get("params")
+         if not isinstance(params, dict):
+             raise AgyError("TOOL_PROTOCOL", "工具参数无效。")
+@@ -609,5 +620,6 @@ class ToolBroker:
+         for task in tasks:
+             task.cancel()
+         await asyncio.gather(*tasks, return_exceptions=True)
++        self.transport.token = ""
+         if self.directory:
+             shutil.rmtree(self.directory, ignore_errors=True)
+diff --git a/agy_provider/transport.py b/agy_provider/transport.py
+index 86ad735..b99d74d 100644
+--- a/agy_provider/transport.py
++++ b/agy_provider/transport.py
+@@ -9,6 +9,7 @@ from dataclasses import dataclass
+ from pathlib import Path
+ 
+ from .config import Settings
++from .context_usage import ContextUsage
+ from .errors import AgyError, classified_error, remote_error
+ from .notices import RetryNoticeGuard, TerminalNoticeGuard
+ from .process import build_child_env, spawn, stop_process
+@@ -38,6 +39,8 @@ class _AgentTextGuard:
+ 
+     def feed(self, text: str, *, final=False) -> str:
+         text = self.retries.feed(text, final=final)
++        if self.retries.fast_fail_code:
++            raise classified_error(self.retries.fast_fail_code)
+         text = self.pending + self.notices.feed(text, final=final)
+         self.pending = ""
+         output = []
+@@ -90,6 +93,10 @@ class AcpClient:
+         self.stderr_diagnostics = deque(maxlen=32)
+         self.latest_usage: dict | None = None
+         self.latest_usage_source: str | None = None
++        self.context_usage = ContextUsage(
++            settings.context_compaction_min_peak, settings.context_compaction_drop_percent
++        )
++        self.prompt_sent = False
+ 
+     @property
+     def alive(self) -> bool:
+@@ -115,7 +122,7 @@ class AcpClient:
+                 {
+                     "protocolVersion": 1,
+                     "clientCapabilities": {},
+-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.5.2"},
++                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.6.0"},
+                 },
+                 self.settings.startup_timeout,
+             )
+@@ -127,10 +134,10 @@ class AcpClient:
+             await self.close()
+             raise
+ 
+-    async def _write(self, obj: dict) -> None:
+-        if self.failed:
++    async def _write(self, obj: dict, *, cancelling: bool = False) -> None:
++        if self.failed and not cancelling:
+             raise self.failed
+-        if not self.alive or not self.proc or not self.proc.stdin:
++        if self.closed or not self.proc or self.proc.returncode is not None or not self.proc.stdin:
+             raise AgyError("TRANSPORT", "AGY 连接已关闭。")
+         data = (
+             json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
+@@ -138,6 +145,8 @@ class AcpClient:
+         async with self.write_lock:
+             try:
+                 self.proc.stdin.write(data)
++                if obj.get("method") == "session/prompt":
++                    self.prompt_sent = True
+                 await asyncio.wait_for(
+                     self.proc.stdin.drain(), self.settings.startup_timeout
+                 )
+@@ -178,9 +187,10 @@ class AcpClient:
+             return result
+         except TimeoutError:
+             raise self._diagnose(
+-                AgyError("TIMEOUT", f"ACP {self.stage} 超时。")
++                AgyError("TIMEOUT", f"ACP {self.stage} 超时。", stage=self.stage)
+             ) from None
+         except AgyError as exc:
++            exc.rpc_stage = self.stage
+             if exc.code == "TRANSPORT":
+                 # A wrapper may exit before stdin.drain() completes. Collect
+                 # the same bounded evidence as stdout EOF before closing it.
+@@ -204,6 +214,10 @@ class AcpClient:
+         if not isinstance(sid, str) or not sid:
+             raise AgyError("PROTOCOL", "AGY 没有返回 sessionId。")
+         self.session_id = sid
++        self.context_usage = ContextUsage(
++            self.settings.context_compaction_min_peak,
++            self.settings.context_compaction_drop_percent,
++        )
+         return result
+ 
+     async def set_option(self, option: str, value: str) -> dict:
+@@ -406,6 +420,12 @@ class AcpClient:
+             except asyncio.QueueFull:
+                 pass
+         kind = update.get("sessionUpdate")
++        if kind == "usage_update":
++            self.context_usage.observe(update)
++            return
++        if kind in {"current_model_update", "config_option_update"}:
++            self.context_usage.observe({})
++            return
+         if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
+             raise remote_error(update.get("error", update))
+         if kind in {"tool_call", "tool_call_update"}:
+@@ -453,7 +473,10 @@ class AcpClient:
+         self.output_bytes = 0
+         self.text_guard = _AgentTextGuard()
+         self.active = True
++        if self.tool_broker is not None:
++            self.tool_broker.turn_active = True
+         self.prompt_terminal = False
++        self.prompt_sent = False
+         self.latest_usage = None
+         self.latest_usage_source = None
+         self.prompt_deadline = (
+@@ -476,6 +499,8 @@ class AcpClient:
+ 
+         def prompt_finished(task):
+             self.prompt_terminal = True
++            if self.tool_broker is not None:
++                self.tool_broker.turn_active = False
+             if task.cancelled():
+                 return
+             error = task.exception()
+@@ -546,6 +571,8 @@ class AcpClient:
+                     getter = None
+         finally:
+             self.active = False
++            if self.tool_broker is not None:
++                self.tool_broker.turn_active = False
+             if getter is not None:
+                 getter.cancel()
+                 await asyncio.gather(getter, return_exceptions=True)
+@@ -557,7 +584,8 @@ class AcpClient:
+                                 "jsonrpc": "2.0",
+                                 "method": "session/cancel",
+                                 "params": {"sessionId": self.session_id},
+-                            }
++                            },
++                            cancelling=True,
+                         ),
+                         2,
+                     )
+diff --git a/agy_provider/windows_job.py b/agy_provider/windows_job.py
+new file mode 100644
+index 0000000..679731d
+--- /dev/null
++++ b/agy_provider/windows_job.py
+@@ -0,0 +1,117 @@
++"""Best-effort Windows child-tree ownership using stdlib ctypes only.
++
++No global process enumeration or PID cleanup list. The handle is non-inheritable;
++closing it (including host termination) kills only descendants assigned to this job.
++Asyncio does not expose atomic suspended-create/assign/resume: attachment is best
++effort immediately after spawn, and taskkill remains the documented fallback.
++"""
++
++import ctypes
++import asyncio
++import os
++from ctypes import wintypes
++
++
++class _BasicLimits(ctypes.Structure):
++    _fields_ = [
++        ("PerProcessUserTimeLimit", ctypes.c_int64),
++        ("PerJobUserTimeLimit", ctypes.c_int64),
++        ("LimitFlags", wintypes.DWORD),
++        ("MinimumWorkingSetSize", ctypes.c_size_t),
++        ("MaximumWorkingSetSize", ctypes.c_size_t),
++        ("ActiveProcessLimit", wintypes.DWORD),
++        ("Affinity", ctypes.c_size_t),
++        ("PriorityClass", wintypes.DWORD),
++        ("SchedulingClass", wintypes.DWORD),
++    ]
++
++
++class _IoCounters(ctypes.Structure):
++    _fields_ = [(name, ctypes.c_uint64) for name in (
++        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
++        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
++    )]
++
++
++class _ExtendedLimits(ctypes.Structure):
++    _fields_ = [
++        ("BasicLimitInformation", _BasicLimits), ("IoInfo", _IoCounters),
++        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
++        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t),
++    ]
++
++
++class _Accounting(ctypes.Structure):
++    _fields_ = [(name, ctypes.c_int64) for name in (
++        "TotalUserTime", "TotalKernelTime", "ThisPeriodTotalUserTime", "ThisPeriodTotalKernelTime",
++    )] + [(name, wintypes.DWORD) for name in (
++        "TotalPageFaultCount", "TotalProcesses", "ActiveProcesses", "TotalTerminatedProcesses",
++    )]
++
++
++class WindowsJob:
++    def __init__(self, api, handle):
++        self._api, self._handle = api, handle
++
++    @classmethod
++    def attach(cls, pid: int):
++        if os.name != "nt":
++            return None
++        api = ctypes.WinDLL("kernel32", use_last_error=True)
++        for name, args, result in (
++            ("CreateJobObjectW", [ctypes.c_void_p, wintypes.LPCWSTR], wintypes.HANDLE),
++            ("SetInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD], wintypes.BOOL),
++            ("OpenProcess", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
++            ("AssignProcessToJobObject", [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
++            ("CloseHandle", [wintypes.HANDLE], wintypes.BOOL),
++            ("TerminateJobObject", [wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
++            ("QueryInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p], wintypes.BOOL),
++        ):
++            function = getattr(api, name)
++            function.argtypes, function.restype = args, result
++        handle = api.CreateJobObjectW(None, None)
++        if not handle:
++            return None
++        process = None
++        assigned = False
++        try:
++            limits = _ExtendedLimits()
++            limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
++            if not api.SetInformationJobObject(handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
++                return None
++            process = api.OpenProcess(0x0101, False, pid)  # SET_QUOTA | TERMINATE
++            if not process or not api.AssignProcessToJobObject(handle, process):
++                return None
++            assigned = True
++            return cls(api, handle)
++        finally:
++            if process:
++                api.CloseHandle(process)
++            if not assigned:
++                api.CloseHandle(handle)
++
++    def close(self) -> None:
++        if self._handle is not None:
++            handle, self._handle = self._handle, None
++            self._api.CloseHandle(handle)
++
++    async def stop(self) -> None:
++        if self._handle is None:
++            return
++        try:
++            # CloseHandle's kill-on-close is asynchronous. Waiting only for the
++            # front process can leave a dying MCP child holding the workspace
++            # as its cwd, causing WinError 32 during session directory cleanup.
++            self._api.TerminateJobObject(self._handle, 1)
++            deadline = asyncio.get_running_loop().time() + 3
++            while True:
++                accounting = _Accounting()
++                if not self._api.QueryInformationJobObject(
++                    self._handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
++                ) or accounting.ActiveProcesses == 0:
++                    break
++                if asyncio.get_running_loop().time() >= deadline:
++                    break
++                await asyncio.sleep(0.01)
++        finally:
++            self.close()
+diff --git a/docs/liftgate-hardening-plan.md b/docs/liftgate-hardening-plan.md
+new file mode 100644
+index 0000000..bc3e030
+--- /dev/null
++++ b/docs/liftgate-hardening-plan.md
+@@ -0,0 +1,78 @@
++# LiftGate 参考改进计划与交接（0.6.0，待验收）
++
++> 后续状态：作者已追加授权验收与测试。离线测试、修复及真实限制见 [PR #9 验收记录](pr9-acceptance.md)。下文“未测试”保留为最初实现阶段记录，以验收记录为当前状态。
++
++本次按仓库作者 2026-11-15 的请求实施并提交功能 PR；测试由作者交给其他模型。
++参考施工书用于识别问题，不将其中“运行测试、真机 A/B、全部验收通过”等文字视为本次授权或既成结果。
++本分支不自动合并、不发布 Release、不部署、不更换本机 AGY、不访问账号凭据。
++
++## 基线与参考
++
++- 插件：`main` / `05e6e6ce5103d2b24a7866c10337558e223dccd8`（0.5.3）。本地旧工作区有未提交修改，本任务使用独立 worktree。
++- LiftGate：`95aef4e4e72b4f1addcd16c3b020e475055d45d6`。
++- [参考架构](https://github.com/acking-you/liftgate/blob/95aef4e4e72b4f1addcd16c3b020e475055d45d6/docs/architecture.md)、[压缩观测](https://github.com/acking-you/liftgate/blob/95aef4e4e72b4f1addcd16c3b020e475055d45d6/crates/liftgate-server/src/turn_runner.rs)、[进程托管](https://github.com/acking-you/liftgate/blob/95aef4e4e72b4f1addcd16c3b020e475055d45d6/crates/liftgate-server/src/job.rs)。只借鉴思路，未复制 Rust 代码。
++- [ACP v1 usage_update 契约](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/prompt-turn.mdx)：`used` / `size` 为上下文占用；不能作为本轮账单。
++- [AstrBot 4.29.4 runner](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.4/astrbot/core/agent/runners/tool_loop_agent_runner.py)：`_iter_llm_responses_with_fallback` 在普通异常后继续下一候选，即使之前已经发送流块；不读取插件 `no_retry` 属性。
++- [Google 官方 CLI 安装指引](https://antigravity.google/docs/cli/tutorial)。LiftGate 中存在 manifest 下载与替换代码，但这不是本插件已有的受托管安装契约。
++
++## 对比结论
++
++插件已经具备严格身份隔离、双历史账本、有限会话池、EMPTY 去重、QUOTA 半开探针与真实 MCP 宿主执行链。
++值得补齐的是上游状态变化后的正确性及 Windows 支持，而不是再次实现会话缓存或照搬 HTTP 网关。
++保留官方 ACP stdio、内置工具权限拒绝、宿主审批、默认关闭工具/图片和 `history_bytes=160000`。
++
++## 实施清单
++
++| 项 | 本分支实现 | 状态与边界 |
++|---|---|---|
++| A 上下文压缩 | `context_usage.py` 观测同一 ACP session 的正整数 `used/size`；峰值默认 ≥64000、当前严格低于峰值 50% 时记录疑似压缩；本轮完成后退休，下一轮按宿主历史重建 | 已实现，未测试；无占用字段保持 unknown，不使用计费 inputTokens 猜测 |
++| B 强错误中断 | 分块 banner 状态分类；明确额度耗尽/认证致命错误立即失败；两个不同 attempt 的连续 429/RESOURCE_EXHAUSTED 提前失败；503 留给原请求超时内的 CLI 重试；修复 failed 状态下 cancel 写入被自身拦截 | 已实现，未测试；stderr 仍仅辅助失败诊断，不凭背景告警否决成功请求 |
++| B 防重放 | Provider 在部分文本/思考或工具交接后标记 no_retry + no_fallback；宿主兼容层在后续候选调用之前拦截，保留终态错误；输出前的冷却/去重仍允许宿主 fallback | 已实现，未测试；仅适用于已识别的 AstrBot runner 接口，缺失时告警，其他调用方须尊重这两个属性 |
++| C 组件精简 | `agy_customizations_mode=inherit|minimal`；默认 inherit；只在工具默认 Agent 添加已探测到的参数，缺失则 UNSUPPORTED；聊天 Agent 不变 | 实验代码已实现；MCP 真机与 A/B 尚未验收，不承诺降本 |
++| D 指标 | 计费 usage 与 occupancy 分离；保留失败 usage；实际 stdin 写入才标记 request_sent；新增阶段、快速中断、压缩字段；最近 100 轮/24 小时内存窗口及模式、模型、结果、冷热分组 | 已实现，未测试；持久日志仍默认关闭，unknown 不按 0 计费 |
++| E 进程托管 | Windows ctypes Job Object + KILL_ON_JOB_CLOSE；无权限/嵌套 Job 不兼容时保留 taskkill；同一进程只创建一个清理任务；spawn 重复取消继续等待并回收 | 已实现，未测试；不是原子 suspended-spawn，存在创建至绑定的短窗口；POSIX 保留进程组，无 preexec_fn |
++| F Windows MCP | POSIX 仍用 0600 Unix socket；Windows 用 127.0.0.1 随机端口、256-bit 会话密钥、双向随机挑战/HMAC、帧及握手上限；Windows stdio 使用有界队列及专用 daemon reader；非活跃轮拒绝 tools/call | 已实现，未测试；端口不提供远程模型 API，工具仍交宿主审批执行 |
++| G CLI 管理 | doctor/设置页显示版本、参数能力、当前组件模式、实际 Job 绑定/回退、本地桥类型与远程版本未检查状态；版本/帮助捕获有字节上限；补充手动更新/恢复指引 | 仅实现检测和指导；未交付下载、SHA-512 安装、热替换或自动回滚 |
++| H 动态工具/模型 | 保留严格重建与确定性 schema 排序；未新增伪动态工具开关 | 明确延期：LiftGate 的 XML 工具更新不能证明真实 MCP 列表与宿主权限可原子更新；模型/档位热切换也未真机验证 |
++| I 配置与交接 | 同步 schema、诊断 UI、README、CHANGELOG、版本标识与本文 | 不新增/执行测试；由作者指定模型补回归与实机验收 |
++
++G 未做安装器的具体理由：当前 `command` 可以指向用户全局 CLI，插件没有托管目录、升级锁或备份索引；也未验证各平台官方 manifest/归档布局及“替换后握手失败”恢复链。新增未验收的二进制替换路径会扩大此次改动面。状态明确为 `not_checked` / `manual_external`，不伪报“最新版”。
++
++## 实现顺序与规则
++
++1. 固定基线并创建 `feat/acp-liftgate-hardening`。
++2. 接入上下文占用与终态退役，再扩展现有 telemetry。
++3. 分类 banner、接入唯一 FailureGuard、处理 cancel 和宿主 fallback 防重放。
++4. 添加默认关闭的组件精简实验、Windows 桥与进程生命周期托管。
++5. 同步配置/诊断/文档，静态审阅，提交 Draft PR 供后续模型验收。
++
++FailureGuard 仍是唯一冷却来源，scope 为 `(provider_id, model)`。QUOTA 与 RATE_LIMIT 均沿用 `quota_cooldown`（默认 60 秒，0 禁用，最大 300 秒；结构化 retry_after 有界）；保留原错误码和单半开探针。AUTH 不进入额度缓存。单次 503 banner 本身不关闭会话、不写入冷却；只有最终失败才会记录 RATE_LIMIT。
++
++上下文比较在异常/零/缺失占用、窗口大小或模型配置通知变化时重置；不同 client 和新 session 不共享状态。疑似压缩标记是启发式，不保证真实发生了压缩。本轮终态前不回收进程，因此不会因压缩在工具执行中途自动重放。
++
++Windows 桥每个连接先由客户端发送随机挑战，服务端对该挑战和自身 nonce 签名，客户端验证服务端后再签名请求；旧握手/请求不能用于新连接。认证密钥只放 MCP 环境，不在 argv、磁盘和日志中。关闭 broker 会清空密钥并取消连接/回调；工具调用 ID 去重与宿主 session 元数据校验保留。该认证不防拥有同一用户进程调试权限的本地攻击者。
++
++## 交给测试模型的验收项（均未执行）
++
++- 先更新已有语义断言：普通容量/429 应为 RATE_LIMIT，明确 quota exhausted 才为 QUOTA；直接调用 ToolBroker 的 fixture 需要模拟活跃 prompt；模拟 client 需标记真实 prompt 写入，不能仅以产生事件假装发送；计费 usage 缺 cachedReadTokens 时 input_cached 为 null，汇总仅合计已知缓存读取并列出缺失样本。
++- A：增长、64000 边界、恰好 50% 不触发、低于 50% 触发；零/null/bool/float/缺字段/size 变化中断比较；缓存计费不影响占用；跨会话/跨模型不串；工具续轮完整交付后退休。
++- B：对 banner 每个字符边界切块，额度、401、两次不同 attempt 的 429、重复同一 attempt、503 后恢复、普通正文引用 429、包裹 URL 续行；取消/超时/EOF 竞争，确认只发一次 cancel、Future/reader 无遗留。
++- 防重放：AstrBot 4.29.4 真正 runner + 至少两个 fallback 候选；首字前失败可 fallback；文本/思考后失败、非流式工具结果续轮失败不调用下一 provider；普通其他 provider 行为不变；卸载与第三方后置 patch 不互相覆盖；不同 runner/task 隔离。
++- C：inherit 下启动参数与基线一致；minimal 不支持时明确失败；同模型/人格分别做 chat/tools 的 inherit/minimal 冷热 A/B，每组至少三次，记录工具成功率、latency、reported input/cached/output；字段缺失报告 unknown。
++- D：成功、失败带 usage、无 usage、失败前未写 prompt、取消、EMPTY 去重、半开短路、工具续轮均只计一次；计费与 occupancy 不混用；24 小时 TTL、100 条容量及分组截断；日志不含正文、原始用户 ID、代理密码或桥密钥。
++- E：Windows 普通退出、父进程崩溃、前台 CLI 先退出后代存活、嵌套 Job 绑定失败、重复 close、spawn 多次 cancel；POSIX 独立组杀死，仅清理由本插件创建的进程。
++- F：Windows 原生 Python/AGY 的 tools/list、真实宿主工具、拒绝审批、直接发送消息工具、取消、超时、迟到回调、空闲轮拒绝；假服务端、错密钥、旧 challenge、旧 request、畸形/超大帧、端口复用、多个实例；POSIX Unix socket 回归。
++- G：版本 banner 含异常内容不泄漏；help 输出超限、挂起、参数缺失；Job 回退显示与实际一致；remote latest 始终 not_checked；插件启动不下载或执行更新脚本。
++- 现有核心回归入口（供后续模型执行，本任务未执行）：`python -m unittest discover -s tests -v`、`node --test tests/setup.test.mjs`。真实 AGY 请求必须由测试方显式选择，不在本任务运行。
++
++## 验证记录与收益
++
++- 未运行 Python/Node 测试、fake CLI、真实 AGY、模型请求、Windows 工具 E2E、性能 A/B 或更新回滚演练；未报告任何“通过率”或节省 Token 数字。
++- 已执行源码审阅及静态检查：`ast.parse` 解析 26 个 Python 源文件（不导入/执行模块），`json.loads` 解析配置 schema，`node --input-type=module --check` 检查设置页语法，`git diff --check` 检查差异格式，均无错误。静态检查不等于功能验收。
++- GitHub 仓库现有 push/PR 工作流由平台自动触发；本任务不手动触发、重跑或代替作者执行测试。
++
++## 回滚
++
++组件实验失败：恢复 `agy_customizations_mode=inherit` 并重载插件。Windows 工具问题可先关闭 `enable_tools` 并重载，纯聊天路径仍可单独使用。
++整体退回：停用插件、等待当前请求/工具完成清理，恢复 0.5.3 或上述基线，再重载；没有持久会话格式迁移。CLI 从未被本分支更换，CLI 版本不需要随插件回滚。
++不要将未验收的分支直接部署到线上；测试与审查后再由维护者决定是否合并/发布。
+diff --git a/docs/pr9-acceptance.md b/docs/pr9-acceptance.md
+new file mode 100644
+index 0000000..129dd6e
+--- /dev/null
++++ b/docs/pr9-acceptance.md
+@@ -0,0 +1,56 @@
++# PR #9 离线验收记录
++
++2026-11-15，作者要求“验收并测试 PR9，暂时不合并入 main”。此指示更新了最初实现阶段“不运行测试”的约束。
++
++## 验收结论
++
++本机 Windows 的离线验收通过；已补充跨平台 CI 测试。PR 保持 Draft，未合并、未发布、未部署。
++真实 AGY/Google 模型、完整 AstrBot 部署和组件精简 A/B 尚未验收，不据此宣称线上可用或节省 Token。
++
++起点为 `bb6aa06`：原有 Python 165 项在本机出现 13 个失败、12 个错误、2 项跳过；原 PR 的 Linux/Windows × Python 3.11/3.12 四项 CI 也全部失败。
++其中大部分是新参数、错误码和 unknown 缓存语义没有同步旧夹具/断言；本次调整保留了原断言含义，并补充针对新行为的测试。
++
++## 实际缺陷与修复
++
++1. **RPC 额度错误漏分类**：`Resource has been exhausted (quota)` 被归为 UPSTREAM，漏掉 FailureGuard 冷却。补充明确 quota 诊断匹配，429/503 容量错误仍保留 RATE_LIMIT。
++2. **MCP relay 输出编码错误**：原 relay 通过系统默认编码输出 Unicode，中文/emoji 在非 UTF-8 环境失败。固定通过 stdout.buffer 输出 UTF-8 字节，并在 `PYTHONIOENCODING=ascii` 下执行真实 relay 子进程回归。
++3. **Windows 后代进程清理竞态**：Job Object 关闭是异步的；仅等待前台 CLI 退出可能在后代仍持有工作目录时删除目录，产生 WinError 32。改为显式 TerminateJobObject，并有界查询活动进程归零后关闭 Job 句柄；保留 kill-on-close 和绑定失败时的 taskkill 回退。
++
++## 已执行验证
++
++本机环境：Windows、Python 3.12.10、Node.js 24.11.1。
++
++| 检查 | 结果 |
++|---|---|
++| `python -W error::ResourceWarning -m unittest discover -s tests -v`，提供可选官方 runner 源码 | 198 项，195 通过、3 项按平台/权限跳过，16.467 秒；无 ResourceWarning |
++| `node --test tests/setup.test.mjs` | 12 项通过 |
++| `python -B -m compileall -q main.py agy_provider tests` | 通过 |
++| `git diff --check` | 通过 |
++
++Windows 跳过项：POSIX 文件属主/权限检查、Unix socket 专项、官方认证文件符号链接权限不满足（此权限的拒绝路径另有覆盖）。没有跳过本次新增的 Windows Job Object 或 MCP relay 测试。
++
++可选官方宿主契约测试使用 [AstrBot v4.29.4 runner 源码](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.4/astrbot/core/agent/runners/tool_loop_agent_runner.py)：只用 AST 选择原始 `_iter_llm_responses_with_fallback` 方法，注入测试边界依赖执行，不启动完整 AstrBot、不接触账号。AgyError 不属于 EmptyModelOutputError，重试适配桩在这些路径只执行一次，与原生重试条件一致。
++源码保存在工作区外；设置 `AGY_HOST_RUNNER_SOURCE` 指向该源码即可复现。普通离线 CI 未提供时只跳过这个可选项，另有始终执行的宿主契约夹具测试。
++
++## 新增覆盖
++
++- 上下文增长、64000/50% 边界、异常/null/零/格式变化、缓存计费不可用于压缩判断、模型/窗口/会话隔离、当前回复完整交付后退役及下轮重建。
++- 每个分块边界的额度/认证告警、两个不同 attempt 的持续 429、重复 attempt、503 恢复、正常正文引用错误码；真实 stdio 下快速失败后只发一次 session/cancel、保留失败 usage、回收 reader/Future。
++- FailureGuard RATE_LIMIT 错误码保留、冷却、单半开探针与恢复；telemetry 单轮幂等、100 条容量、24 小时 TTL、分组、未知缓存字段与身份脱敏。
++- Windows 回环认证桥的 tools/list、tools/call、Unicode 结果、错误密钥、实例隔离、旧连接请求重放、畸形/超大帧、握手超时、空闲轮/错误会话/schema 拒绝、审批拒绝/超时、连接取消和迟到结果拒绝。
++- 完整离线链路：fake ACP → 实际 MCP relay 子进程 → ToolBroker → ToolTurn 宿主审批/交接 → 工具结果续轮；验证内置 session/request_permission 始终拒绝、压缩不会在工具执行中途退役、成功只交接一次、拒绝不交给执行器、取消后状态为 unknown。
++- Provider 部分输出后 no_retry/no_fallback；宿主候选拦截、输出前冷却允许 fallback、其他 Provider 不受影响、并发 runner 隔离、卸载不覆盖第三方后置 wrapper。
++- 实际 Windows Job Object 绑定、绑定失败回退、前台退出后后代存活再清理、宿主 os._exit 模拟异常退出后的子进程清理；重复 shutdown、spawn 重复取消、CLI 探测输出超限与超时。
++- 组件精简默认关闭、支持/不支持参数、聊天 Agent 隔离、配置非法值和范围。
++
++## 尚未验证
++
++- 本机 PATH、`%LOCALAPPDATA%/agy/bin` 和用户 `.local/bin` 均未找到原生 AGY，未调用真实模型或 Google 账号。fake ACP 不等于真实 AGY。
++- 未启动完整 AstrBot、真实聊天平台或外部业务工具。工具执行器在离线边界模拟，传输、会话、审批及续轮使用真实插件代码。
++- `minimal` 的工具可见性、相同模型/人格的冷暖 Token/延迟 A/B、上游真实压缩事件均待有账号环境验收，实验默认 inherit。
++- CLI 自动更新/二进制热替换和动态 MCP/模型热更新仍是明确延期项，不在此 PR 宣称交付。
++- Windows 创建进程至绑定 Job 的短窗口仍存在；POSIX 未新增父死亡信号，宿主 SIGKILL 的限制不变。
++
++## CI
++
++修复提交推送后，以 PR 当前 HEAD 的 Regression tests 为准核对 Linux/Windows × Python 3.11/3.12 四项结果；本记录不沿用原始失败提交的结果。
+diff --git a/main.py b/main.py
+index 5da41d3..3000aa7 100644
+--- a/main.py
++++ b/main.py
+@@ -43,7 +43,7 @@ def unregister_owned_adapter() -> None:
+     "astrbot_plugin_antigravity_acp",
+     "sl251",
+     "通过本机 AGY ACP 使用 Gemini 模型",
+-    "0.5.2",
++    "0.6.0",
+     "https://github.com/sl251/astrbot_plugin_antigravity_acp",
+ )
+ class AgyProviderPlugin(Star):
+diff --git a/metadata.yaml b/metadata.yaml
+index e0fc4ee..288e86e 100644
+--- a/metadata.yaml
++++ b/metadata.yaml
+@@ -1,8 +1,8 @@
+ name: astrbot_plugin_antigravity_acp
+ display_name: Antigravity ACP
+ short_desc: 免反代：官方 AGY CLI 直连，把 Gemini 用作 AstrBot 主模型
+-desc: 免反代、免 API Key：通过官方 Antigravity CLI（agy）和 ACP 协议把 Gemini 接入 AstrBot。安装后可在侧边栏或插件详情的「Antigravity ACP」面板检测环境、完成官方登录、选择并启用模型；支持思考档位、原生工具与图片输入。需在 AstrBot 实际运行环境安装官方 CLI。
+-version: 0.5.2
++desc: 免反代、免 API Key：通过官方 AGY CLI（ACP）接入 Gemini，支持思考、工具与图片输入（需自备 CLI）。
++version: 0.6.0
+ author: sl251
+ repo: https://github.com/sl251/astrbot_plugin_antigravity_acp
+ astrbot_version: ">=4.29.4,<4.30"
+diff --git a/tests/fake_cli.py b/tests/fake_cli.py
+index d27e7c2..bd997b8 100644
+--- a/tests/fake_cli.py
++++ b/tests/fake_cli.py
+@@ -70,6 +70,8 @@ for line in sys.stdin:
+     request = json.loads(line)
+     method = request.get("method")
+     if "id" not in request:
++        if method == "session/cancel":
++            record("cancel")
+         continue
+     result = {}
+     if method == "initialize":
+@@ -133,6 +135,30 @@ for line in sys.stdin:
+             block_types=[b.get("type") for b in blocks if isinstance(b, dict)],
+         )
+         cur = active_scenario()
++        if cur in {"context-drop", "context-grow", "strong-quota", "strong-auth", "strong-rate", "partial-fatal"}:
++            def update(value):
++                send({"method": "session/update", "params": {
++                    "sessionId": "fake-session", "update": value}})
++
++            if cur.startswith("context-"):
++                for used in (100000, 20000 if cur == "context-drop" else 110000):
++                    update({"sessionUpdate": "usage_update", "used": used, "size": 200000})
++                update({"sessionUpdate": "agent_message_chunk", "content": {
++                    "type": "text", "text": "complete answer"}})
++                send({"id": request["id"], "result": {"stopReason": "end_turn"}})
++            else:
++                update({"sessionUpdate": "usage_update", "usage": {"inputTokens": 150, "outputTokens": 1}})
++                if cur == "partial-fatal":
++                    update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial answer\n"}})
++                    time.sleep(0.05)
++                error = {"strong-quota": "Daily quota exhausted", "strong-auth": "401 UNAUTHENTICATED",
++                         "partial-fatal": "Daily quota exhausted", "strong-rate": "429 RESOURCE_EXHAUSTED"}[cur]
++                for attempt in range(1, 3 if cur == "strong-rate" else 2):
++                    for char in f"⚠ API error (attempt {attempt}): {error}\n":
++                        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": char}})
++                # Deliberately withhold prompt response. The next input must be
++                # session/cancel, proving cancellation works after reader failure.
++            continue
+         if cur == "probe":
+             send(
+                 {
+diff --git a/tests/fake_tool_cli.py b/tests/fake_tool_cli.py
+new file mode 100644
+index 0000000..8c683a1
+--- /dev/null
++++ b/tests/fake_tool_cli.py
+@@ -0,0 +1,59 @@
++"""Offline ACP peer driving the real stdio MCP relay and host tool turn."""
++
++import json
++import os
++import subprocess
++import sys
++
++
++def send(value):
++    sys.stdout.buffer.write((json.dumps({"jsonrpc": "2.0", **value}) + "\n").encode())
++    sys.stdout.buffer.flush()
++
++
++def update(value):
++    send({"method": "session/update", "params": {"sessionId": "tool-session", "update": value}})
++
++
++relay = None
++try:
++    for line in sys.stdin.buffer:
++        obj = json.loads(line)
++        method = obj.get("method")
++        if "id" not in obj:
++            continue
++        if method == "initialize":
++            result = {"protocolVersion": 1, "agentCapabilities": {}}
++        elif method == "session/new":
++            server = obj["params"]["mcpServers"][0]
++            relay = subprocess.Popen([server["command"], *server["args"]],
++                                     env={**os.environ, **server["env"]}, stdin=subprocess.PIPE,
++                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++            result = {"sessionId": "tool-session", "configOptions": [{
++                "id": "model", "currentValue": "gemini-test", "options": [{"value": "gemini-test", "name": "Gemini Test"}]}]}
++        elif method == "session/prompt":
++            # Force a built-in permission request: it must always be rejected.
++            send({"id": "permission-1", "method": "session/request_permission", "params": {"sessionId": "tool-session"}})
++            permission = json.loads(sys.stdin.buffer.readline())
++            if permission["result"]["outcome"]["outcome"] != "cancelled":
++                raise SystemExit(9)
++            for used in (100000, 20000):
++                update({"sessionUpdate": "usage_update", "used": used, "size": 200000})
++            request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
++                "name": "echo", "arguments": {"value": "中文 🦊"}, "_meta": {
++                    "antigravity.google/conversation_id": "tool-session",
++                    "antigravity.google/root_conversation_id": "tool-session"}}}
++            relay.stdin.write((json.dumps(request) + "\n").encode())
++            relay.stdin.flush()
++            reply = json.loads(relay.stdout.readline())
++            result = reply["result"]
++            answer = result["content"][0]["text"]
++            update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": answer}})
++            result = {"stopReason": "end_turn", "usage": {"inputTokens": 100, "outputTokens": 5}}
++        else:
++            result = {}
++        send({"id": obj["id"], "result": result})
++finally:
++    if relay is not None:
++        relay.kill()
++        relay.wait()
+diff --git a/tests/test_acp.py b/tests/test_acp.py
+index 0e6853f..f4cc894 100644
+--- a/tests/test_acp.py
++++ b/tests/test_acp.py
+@@ -2,6 +2,7 @@ import os
+ import sys
+ import tempfile
+ import unittest
++from types import SimpleNamespace
+ from pathlib import Path
+ from unittest.mock import AsyncMock, patch
+ 
+@@ -180,8 +181,8 @@ class AcpTests(unittest.IsolatedAsyncioTestCase):
+ 
+         with patch(
+             "agy_provider.process.asyncio.create_subprocess_exec",
+-            AsyncMock(return_value=object()),
+-        ) as create:
++            AsyncMock(return_value=SimpleNamespace(pid=999999)),
++        ) as create, patch("agy_provider.process.WindowsJob.attach", return_value=None):
+             await spawn(["fake-agy", "acp"], self.root)
+         kwargs = create.call_args.kwargs
+         self.assertEqual(
+diff --git a/tests/test_auth_config.py b/tests/test_auth_config.py
+index dff8e68..0b66d1a 100644
+--- a/tests/test_auth_config.py
++++ b/tests/test_auth_config.py
+@@ -203,7 +203,7 @@ class ConfigTests(unittest.TestCase):
+             for key, item in schema.items()
+             if item.get("type") == "int"
+         }
+-        self.assertEqual(len(sliders), 20)
++        self.assertEqual(len(sliders), 22)
+         for key, slider in sliders.items():
+             low, high = slider["min"], slider["max"]
+             base = {"max_sessions": 16} if key == "max_concurrent" else {}
+diff --git a/tests/test_bridge_hardening.py b/tests/test_bridge_hardening.py
+new file mode 100644
+index 0000000..5a94781
+--- /dev/null
++++ b/tests/test_bridge_hardening.py
+@@ -0,0 +1,171 @@
++"""Real socket/stdio relay acceptance; no AGY or host credentials."""
++
++import asyncio
++import json
++import os
++import secrets
++import sys
++import unittest
++from unittest.mock import patch
++from pathlib import Path
++from types import SimpleNamespace
++
++from agy_provider.bridge_transport import BridgeTransport, FRAME_LIMIT, TOKEN_ENV, connect, encode, proof, read_frame
++from agy_provider.config import Settings
++from agy_provider.errors import AgyError
++from agy_provider.process import spawn, stop_process
++from agy_provider.tools import ToolBroker, ToolSnapshot
++
++
++class BridgeTests(unittest.IsolatedAsyncioTestCase):
++    async def make_broker(self):
++        snapshot = ToolSnapshot(SimpleNamespace(tools=[SimpleNamespace(
++            name="echo", active=True, description="offline test", parameters={
++                "type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"],
++                "additionalProperties": False})]))
++        broker = ToolBroker(snapshot, Settings(tool_approval_timeout=1, tool_execution_timeout=1))
++        broker.session_id, broker.turn_active = "session", True
++        self.addAsyncCleanup(broker.close)
++        # Exercise Windows transport on every platform, plus native POSIX below.
++        broker.transport = BridgeTransport(tcp=True)
++        config = await broker.start()
++        return broker, config
++
++    def request(self, ident=1, **values):
++        return {"id": ident, "method": "tools/call", "params": {
++            "name": "echo", "arguments": {"value": values.get("value", "hello")},
++            "_meta": {"antigravity.google/conversation_id": values.get("session", "session"),
++                      "antigravity.google/root_conversation_id": "session"}}}
++
++    async def rpc(self, endpoint, token, request):
++        reader, writer = await connect(endpoint, request, token)
++        try:
++            return await read_frame(reader, 16 * FRAME_LIMIT)
++        finally:
++            writer.close()
++            await writer.wait_closed()
++
++    async def test_tcp_tool_handoff_result_and_duplicate(self):
++        broker, config = await self.make_broker()
++        endpoint, token = config["args"][-1], config["env"][TOKEN_ENV]
++        self.assertNotIn(token, " ".join(config["args"]))
++        self.assertEqual(broker.server.sockets[0].getsockname()[0], "127.0.0.1")
++        result = asyncio.create_task(self.rpc(endpoint, token, self.request()))
++        call = await asyncio.wait_for(broker.ready.get(), 2)
++        broker.handoff(call)
++        broker.resolve(call.id, "中文结果 🦊")
++        self.assertEqual((await result)["result"]["content"][0]["text"], "中文结果 🦊")
++        duplicate = await self.rpc(endpoint, token, self.request())
++        self.assertEqual(duplicate["error"]["message"], "TOOL_DUPLICATE")
++        self.assertEqual(broker.audit[call.id], "completed")
++
++    async def test_wrong_key_fake_server_and_instances_do_not_dispatch(self):
++        one, config1 = await self.make_broker()
++        two, config2 = await self.make_broker()
++        self.assertNotEqual(config1["args"][-1], config2["args"][-1])
++        for token in ("0" * 64, config2["env"][TOKEN_ENV]):
++            with self.assertRaises(ValueError):
++                await self.rpc(config1["args"][-1], token, self.request())
++        self.assertTrue(one.ready.empty() and two.ready.empty())
++
++    async def test_replayed_envelope_rejected_on_new_challenge(self):
++        broker, config = await self.make_broker()
++        port, token = int(config["args"][-1][4:]), config["env"][TOKEN_ENV]
++        envelope = None
++        for replay in (False, True):
++            reader, writer = await asyncio.open_connection("127.0.0.1", port)
++            writer.write(encode({"version": 1, "nonce": secrets.token_hex(32)}) + b"\n")
++            await writer.drain()
++            challenge = await read_frame(reader)
++            request = {"method": "tools/list"}
++            if not replay:
++                envelope = {"version": 1, "request": request, "mac": proof(token, challenge["nonce"], request)}
++            writer.write(encode(envelope) + b"\n")
++            await writer.drain()
++            if replay:
++                self.assertEqual(await asyncio.wait_for(reader.read(), 2), b"")
++            else:
++                self.assertIn("tools", (await read_frame(reader))["result"])
++            writer.close()
++            await writer.wait_closed()
++
++    async def test_invalid_frames_and_handshake_timeout_are_bounded(self):
++        broker, config = await self.make_broker()
++        port = int(config["args"][-1][4:])
++        for frame in (b"not json\n", b"[]\n", b'{"version":true,"nonce":"x"}\n', b"x" * (FRAME_LIMIT + 1) + b"\n"):
++            reader, writer = await asyncio.open_connection("127.0.0.1", port)
++            writer.write(frame)
++            await writer.drain()
++            self.assertEqual(await asyncio.wait_for(reader.read(), 2), b"")
++            writer.close()
++            await writer.wait_closed()
++        self.assertTrue(broker.ready.empty())
++        with patch("agy_provider.bridge_transport.HANDSHAKE_TIMEOUT", 0.05):
++            reader, writer = await asyncio.open_connection("127.0.0.1", port)
++            self.assertEqual(await asyncio.wait_for(reader.read(), 2), b"")
++            writer.close()
++            await writer.wait_closed()
++
++    async def test_idle_wrong_session_and_schema_rejected(self):
++        broker, config = await self.make_broker()
++        endpoint, token = config["args"][-1], config["env"][TOKEN_ENV]
++        broker.turn_active = False
++        self.assertEqual((await self.rpc(endpoint, token, self.request()))["error"]["message"], "TOOL_STALE")
++        broker.turn_active = True
++        self.assertEqual((await self.rpc(endpoint, token, self.request(session="other")))["error"]["message"], "TOOL_SESSION")
++        self.assertEqual((await self.rpc(endpoint, token, self.request(value=123)))["error"]["message"], "TOOL_ARGUMENTS")
++        self.assertTrue(broker.ready.empty())
++
++    async def test_approval_rejection_timeout_and_connection_cancel(self):
++        broker, config = await self.make_broker()
++        endpoint, token = config["args"][-1], config["env"][TOKEN_ENV]
++        task = asyncio.create_task(self.rpc(endpoint, token, self.request()))
++        call = await asyncio.wait_for(broker.ready.get(), 2)
++        broker.reject(call, "TOOL_APPROVAL_DENIED")
++        self.assertTrue((await task)["result"]["isError"])
++        response = await self.rpc(endpoint, token, self.request(2))
++        self.assertEqual(response["result"]["content"][0]["text"], "TOOL_APPROVAL_TIMEOUT")
++        task = asyncio.create_task(self.rpc(endpoint, token, self.request(3)))
++        call = await asyncio.wait_for(broker.ready.get(), 2)
++        broker.handoff(call)
++        task.cancel()
++        await asyncio.gather(task, return_exceptions=True)
++        await broker.close()
++        self.assertFalse(broker.pending or broker.tasks)
++        self.assertEqual(broker.audit[call.id], "unknown")
++        self.assertEqual(broker.transport.token, "")
++        with self.assertRaises(AgyError):
++            broker.resolve(call.id, "late result")
++
++    async def test_stdio_relay_unicode_and_shutdown(self):
++        broker, config = await self.make_broker()
++        env = {**os.environ, **config["env"], "PYTHONIOENCODING": "ascii"}
++        # Force a hostile default encoding to exercise the relay wire contract.
++        proc = await spawn([config["command"], *config["args"]], env=env)
++        self.addAsyncCleanup(stop_process, proc)
++        async def rpc(request):
++            proc.stdin.write(encode({"jsonrpc": "2.0", **request}) + b"\n")
++            await proc.stdin.drain()
++            return await asyncio.wait_for(read_frame(proc.stdout), 3)
++        initialized = await rpc({"id": 10, "method": "initialize"})
++        self.assertIn("tools", initialized["result"]["capabilities"])
++        task = asyncio.create_task(rpc(self.request(value="中文 🦊")))
++        call = await asyncio.wait_for(broker.ready.get(), 2)
++        broker.handoff(call)
++        broker.resolve(call.id, "返回中文 🦊")
++        self.assertEqual((await task)["result"]["content"][0]["text"], "返回中文 🦊")
++        proc.stdin.close()
++        await asyncio.wait_for(proc.wait(), 3)
++        self.assertEqual(proc.returncode, 0)
++
++    @unittest.skipUnless(os.name == "posix", "Unix sockets require POSIX")
++    async def test_native_posix_socket_permissions_and_list(self):
++        broker = ToolBroker(ToolSnapshot(), Settings())
++        self.addAsyncCleanup(broker.close)
++        config = await broker.start()
++        self.assertEqual(broker.path.stat().st_mode & 0o777, 0o600)
++        response = await self.rpc(config["args"][-1], "", {"method": "tools/list"})
++        self.assertEqual(response, {"result": {"tools": []}})
++        path = broker.path
++        await broker.close()
++        self.assertFalse(path.exists())
+diff --git a/tests/test_diagnostics.py b/tests/test_diagnostics.py
+index c68745d..5bac0f1 100644
+--- a/tests/test_diagnostics.py
++++ b/tests/test_diagnostics.py
+@@ -113,7 +113,10 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+     async def test_version_help_failure_keeps_only_exit_code_and_classification(self):
+         proc = SimpleNamespace(
+             returncode=17,
+-            communicate=AsyncMock(return_value=(b"", b"private-path FAKE-PRIVATE")),
++            stdin=None,
++            stdout=SimpleNamespace(read=AsyncMock(side_effect=[b""])),
++            stderr=SimpleNamespace(read=AsyncMock(side_effect=[b"private-path FAKE-PRIVATE", b""])),
++            wait=AsyncMock(return_value=17),
+         )
+         with (
+             patch("agy_provider.process.spawn", AsyncMock(return_value=proc)),
+diff --git a/tests/test_failure_guard.py b/tests/test_failure_guard.py
+index bf8f9c6..15126d2 100644
+--- a/tests/test_failure_guard.py
++++ b/tests/test_failure_guard.py
+@@ -43,8 +43,8 @@ class FailureGuardTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-empty", clock=lambda: now[0])
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "empty", *args[1:]]
+ 
+         req = normalize([], "你好", "sys", [], settings.history_bytes)
+@@ -243,8 +243,8 @@ class FailureGuardTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-nosucc")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         req = normalize([], "重复问候", "sys", [], settings.history_bytes)
+diff --git a/tests/test_hardening.py b/tests/test_hardening.py
+new file mode 100644
+index 0000000..84d0801
+--- /dev/null
++++ b/tests/test_hardening.py
+@@ -0,0 +1,208 @@
++"""Deterministic occupancy, failure, cancellation and cost acceptance."""
++
++import asyncio
++import json
++import os
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import AsyncMock, patch
++
++from tests import astrbot_stub  # noqa: F401
++from agy_provider.config import Settings
++from agy_provider.context_usage import ContextUsage
++from agy_provider.errors import AgyError, remote_error
++from agy_provider.failure_guard import FailureGuard
++from agy_provider.messages import normalize
++from agy_provider.notices import RetryNoticeGuard
++from agy_provider.process import LaunchInfo, launch_args
++from agy_provider.sessions import Runtime
++from agy_provider.telemetry import TelemetryTracker
++from agy_provider.transport import AcpClient, _AgentTextGuard
++
++FIXTURE = Path(__file__).with_name("fake_cli.py")
++
++
++class OccupancyTests(unittest.TestCase):
++    def test_growth_thresholds_and_unknowns(self):
++        for previous, current, detected in ((63999, 100, False), (64000, 32000, False),
++                                             (64000, 31999, True), (100000, 110000, False)):
++            with self.subTest(previous=previous, current=current):
++                state = ContextUsage()
++                state.observe({"used": previous, "size": 200000})
++                state.observe({"used": current, "size": 200000})
++                self.assertEqual(state.suspected_compaction, detected)
++
++    def test_invalid_and_changed_window_break_comparison(self):
++        for invalid in ({}, {"used": 0, "size": 200000}, {"used": None, "size": 200000},
++                        {"used": True, "size": 200000}, {"used": 1.0, "size": 200000},
++                        {"used": 300000, "size": 200000}, {"used": 100, "size": 2**54},
++                        {"used": 20000, "size": 300000}):
++            with self.subTest(invalid=invalid):
++                state = ContextUsage()
++                state.observe({"used": 100000, "size": 200000})
++                state.observe(invalid)
++                state.observe({"used": 10000, "size": 200000})
++                self.assertFalse(state.suspected_compaction)
++
++    def test_session_identity_cache_and_model_isolation(self):
++        one, two = AcpClient(Settings()), AcpClient(Settings())
++        for client in (one, two):
++            client.active, client.session_id = True, "one" if client is one else "two"
++        def update(client, kind, **values):
++            client._on_update({"sessionId": "one", "update": {"sessionUpdate": kind, **values}})
++        update(one, "usage_update", used=100000, size=200000)
++        update(two, "usage_update", used=10000, size=200000)
++        self.assertIsNone(two.context_usage.used)
++        update(one, "usage_update", usage={"inputTokens": 10, "cachedReadTokens": 90000, "outputTokens": 1})
++        update(one, "usage_update", used=10000, size=200000)
++        self.assertFalse(one.context_usage.suspected_compaction)
++        update(one, "usage_update", used=100000, size=200000)
++        update(one, "current_model_update")
++        update(one, "usage_update", used=10000, size=200000)
++        self.assertFalse(one.context_usage.suspected_compaction)
++
++    def test_new_config_validation_and_minimal_arguments(self):
++        defaults = Settings.from_dict({})
++        self.assertEqual(defaults.agy_customizations_mode, "inherit")
++        for value in (True, "unsafe", None):
++            with self.assertRaises(AgyError):
++                Settings.from_dict({"agy_customizations_mode": value})
++        for key in ("context_compaction_min_peak", "context_compaction_drop_percent"):
++            with self.assertRaises(AgyError):
++                Settings.from_dict({key: 0})
++        info = LaunchInfo("fake", "1.5.9", False, True)
++        home = Path("session")
++        self.assertNotIn("--include-default-customizations=false", launch_args(info, home, True))
++        self.assertIn("--include-default-customizations=false", launch_args(info, home, True, customizations_mode="minimal"))
++        self.assertIn("--agent", launch_args(info, home, customizations_mode="minimal"))
++        with self.assertRaises(AgyError) as caught:
++            launch_args(LaunchInfo("fake", "old", False), home, True, customizations_mode="minimal")
++        self.assertEqual(caught.exception.code, "UNSUPPORTED")
++
++
++class ErrorStateTests(unittest.TestCase):
++    def test_strong_errors_at_every_chunk_boundary(self):
++        for message, code in (("Daily quota exhausted", "QUOTA"), ("401 UNAUTHENTICATED", "AUTH"),
++                              ("Invalid token", "AUTH")):
++            banner = f"⚠ API error (attempt 1): {message}\n"
++            for index in range(len(banner) + 1):
++                guard = _AgentTextGuard()
++                with self.assertRaises(AgyError) as caught:
++                    guard.feed(banner[:index])
++                    guard.feed(banner[index:])
++                    guard.feed("", final=True)
++                self.assertEqual(caught.exception.code, code)
++
++    def test_rate_attempts_transient_recovery_and_prose(self):
++        def banner(attempt, message="429 RESOURCE_EXHAUSTED"):
++            return f"⚠ API error (attempt {attempt}): {message}\n"
++        guard = RetryNoticeGuard()
++        for char in banner(1) + banner(1):
++            guard.feed(char)
++        self.assertEqual(guard.fast_fail_code, "")
++        for char in banner(2):
++            guard.feed(char)
++        self.assertEqual(guard.fast_fail_code, "RATE_LIMIT")
++        for middle in (banner(2, "503 UNAVAILABLE: No capacity"), "Recovered answer\n"):
++            guard = RetryNoticeGuard()
++            guard.feed(banner(1) + middle + banner(3))
++            self.assertEqual(guard.fast_fail_code, "")
++        for prose in ('HTTP 429 is a status code.\n', '> ⚠ API error (attempt 1): Daily quota exhausted\n'):
++            self.assertEqual(_AgentTextGuard().feed(prose, final=True), prose)
++
++    def test_explicit_rpc_quota_and_capacity_are_distinct(self):
++        self.assertEqual(remote_error("Resource has been exhausted (quota).").code, "QUOTA")
++        self.assertEqual(remote_error("429 RESOURCE_EXHAUSTED").code, "RATE_LIMIT")
++        self.assertEqual(remote_error("503 No capacity").code, "RATE_LIMIT")
++
++
++class HardeningIntegrationTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="acp-hardening-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++
++    def fake_runtime(self, scenario):
++        runtime = Runtime(Settings(auth_bridge=False, request_timeout=3), self.root / scenario)
++        self.addAsyncCleanup(runtime.close)
++        self.enterContext(patch("agy_provider.sessions.discover", AsyncMock(return_value=LaunchInfo("fake", "1.5.9", False))))
++        self.enterContext(patch("agy_provider.sessions.launch_args", return_value=[sys.executable, str(FIXTURE), scenario]))
++        return runtime
++
++    async def test_compaction_delivers_and_retires_then_rebuilds(self):
++        runtime = self.fake_runtime("context-drop")
++        request = normalize([], "first", "system", [], 160000)
++        events = [event async for event in runtime.stream(request, "identity", "gemini-test", "low")]
++        self.assertEqual(events[-1].text, "complete answer")
++        self.assertNotIn("identity", runtime.sessions)
++        record = runtime.telemetry.history[-1]
++        self.assertTrue(record["upstream_compaction_detected"])
++        self.assertIsNone(record["input_other"])
++        history = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "complete answer"}]
++        request = normalize(history, "second", "system", [], 160000)
++        _ = [event async for event in runtime.stream(request, "identity", "gemini-test", "low")]
++        self.assertIn("upstream_compaction_detected", runtime.telemetry.history[-1]["rebuild_reasons"])
++        self.assertFalse(runtime.telemetry.history[-1]["reused"])
++
++    async def test_growth_keeps_live_session(self):
++        runtime = self.fake_runtime("context-grow")
++        _ = [event async for event in runtime.stream(normalize([], "hi", "", [], 160000), "id", "gemini-test", "low")]
++        self.assertTrue(runtime.sessions["id"].client.alive)
++        self.assertFalse(runtime.telemetry.history[-1]["upstream_compaction_detected"])
++
++    async def test_fast_fail_sends_cancel_after_failure_and_preserves_usage(self):
++        for scenario, code in (("strong-quota", "QUOTA"), ("strong-auth", "AUTH"), ("strong-rate", "RATE_LIMIT")):
++            with self.subTest(scenario=scenario):
++                log = self.root / f"{scenario}.jsonl"
++                client = AcpClient(Settings(auth_bridge=False, request_timeout=3))
++                self.addAsyncCleanup(client.close)
++                with patch.dict(os.environ, {"AGY_TEST_LOG": str(log)}):
++                    await client.start([sys.executable, str(FIXTURE), scenario], self.root)
++                await client.new_session(self.root)
++                async with asyncio.timeout(2):
++                    with self.assertRaises(AgyError) as caught:
++                        _ = [event async for event in client.generate("hi")]
++                self.assertEqual(caught.exception.code, code)
++                # Wait for an observed event, rather than guessing a process delay.
++                async with asyncio.timeout(2):
++                    while '"cancel"' not in log.read_text(encoding="utf-8"):
++                        await asyncio.sleep(0.01)
++                self.assertEqual(sum(json.loads(line)["event"] == "cancel" for line in log.read_text().splitlines()), 1)
++                self.assertEqual(client.latest_usage["inputTokens"], 150)
++                self.assertFalse(client.pending)
++                await client.close()
++                self.assertTrue(client.reader.done() and client.stderr_reader.done())
++
++    async def test_rate_limit_guard_code_half_open_and_zero_short_circuit(self):
++        now = [100.0]
++        guard = FailureGuard(clock=lambda: now[0])
++        guard.record_failure(("provider", "model"), "fp", "RATE_LIMIT", origin_turn_id="turn", quota_ttl=60)
++        check = await guard.check(("provider", "model"), "other")
++        self.assertFalse(check.allowed)
++        self.assertEqual(check.code, "RATE_LIMIT")
++        now[0] += 61
++        checks = await asyncio.gather(*(guard.check(("provider", "model"), "other") for _ in range(3)))
++        self.assertEqual(sum(check.allowed for check in checks), 1)
++        guard.record_success(("provider", "model"))
++        self.assertTrue((await guard.check(("provider", "model"), "other")).allowed)
++
++    async def test_telemetry_ttl_capacity_groups_and_idempotence(self):
++        now = [0.0]
++        tracker = TelemetryTracker(clock=lambda: now[0])
++        for index in range(105):
++            meter = tracker.start_turn(provider="p", session_key_raw="private-user", mode="tools" if index % 2 else "chat", model="m", effort="low")
++            meter.request_sent = True
++            if index % 2:
++                meter.observe_usage({"usage": {"inputTokens": 100, "outputTokens": 2}}, source="acp_error")
++            meter.finish(status="error" if index % 2 else "ok")
++            self.assertIsNone(meter.finish(status="ok"))
++        summary = tracker.summarize()
++        self.assertEqual(summary["total_turns"], 100)
++        self.assertEqual(sum(group["turns"] for group in summary["groups"]), 100)
++        self.assertEqual(sum(group["cached_read_unknown"] for group in summary["groups"]), 50)
++        self.assertFalse(tracker.emitted_lines)
++        self.assertNotIn("private-user", json.dumps(list(tracker.history)))
++        now[0] = 86401
++        self.assertEqual(tracker.summarize()["total_turns"], 0)
+diff --git a/tests/test_host_replay.py b/tests/test_host_replay.py
+new file mode 100644
+index 0000000..8183701
+--- /dev/null
++++ b/tests/test_host_replay.py
+@@ -0,0 +1,152 @@
++"""Exercise the native host's catch-and-fallback contract without AstrBot I/O.
++
++Optionally run the exact official 4.29.4 method via AGY_HOST_RUNNER_SOURCE.
++The optional source is read/AST-selected locally; tests never fetch code.
++"""
++
++import ast
++import asyncio
++import os
++import sys
++import types
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
++
++from agy_provider.errors import AgyError
++from agy_provider.host_compat import install_host_compat, uninstall_host_compat
++
++
++class Response:
++    def __init__(self, **kwargs):
++        self.__dict__.update(kwargs)
++
++
++class _Attempt:
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *args):
++        return False
++
++
++class _OneAttempt:
++    """AgyError is not EmptyModelOutputError, so native retry makes one attempt."""
++    def __init__(self, **kwargs):
++        pass
++
++    async def __aiter__(self):
++        yield _Attempt()
++
++
++def runner_type(official_source=None):
++    class Runner:
++        async def reset(self, provider, request, tool_schema_mode="full"):
++            self.provider = provider
++
++        async def step_until_done(self):
++            if False:
++                yield
++
++        async def _iter_llm_responses(self, **kwargs):
++            provider = self.provider
++            provider.calls += 1
++            await asyncio.sleep(0)
++            if provider.partial:
++                yield Response(is_chunk=True, completion_text=provider.partial)
++            if provider.error:
++                raise provider.error
++            yield Response(is_chunk=False, role="assistant", completion_text="success")
++
++        async def _iter_llm_responses_with_fallback(self):
++            # Same boundary as 4.29.4: broad Exception fallback, no attribute check.
++            for candidate in [self.provider, *self.fallback_providers]:
++                self.provider = candidate
++                try:
++                    async for response in self._iter_llm_responses():
++                        yield response
++                    return
++                except Exception:
++                    continue
++            yield Response(role="err", completion_text="all failed")
++
++        def _is_stop_requested(self):
++            return False
++
++        def _sanitize_malformed_tool_calls(self, response):
++            pass
++
++    if official_source:
++        module = ast.parse(Path(official_source).read_text(encoding="utf-8"))
++        cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "ToolLoopAgentRunner")
++        method = next(node for node in cls.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "_iter_llm_responses_with_fallback")
++        namespace = {"T": types, "LLMResponse": Response, "AsyncRetrying": _OneAttempt,
++                     "EmptyModelOutputError": type("EmptyModelOutputError", (Exception,), {}),
++                     "retry_if_exception_type": lambda *a, **k: None,
++                     "stop_after_attempt": lambda *a, **k: None, "wait_exponential": lambda *a, **k: None,
++                     "logger": Mock()}
++        # Deferred annotations avoid importing AstrBot/typing/tenacity modules.
++        code = "from __future__ import annotations\n" + ast.unparse(method)
++        exec(compile(code, str(official_source), "exec"), namespace)
++        Runner._iter_llm_responses_with_fallback = namespace[method.name]
++    return Runner
++
++
++class ReplayTests(unittest.IsolatedAsyncioTestCase):
++    async def run_case(self, runner, *, partial="", error=None, owned=True):
++        one = SimpleNamespace(agy_plugin_owner="test-owner" if owned else "someone-else",
++                              provider_config={"id": "primary"}, calls=0, partial=partial, error=error)
++        two = SimpleNamespace(provider_config={"id": "fallback"}, calls=0, partial="", error=None)
++        instance = runner()
++        instance.provider, instance.fallback_providers = one, [two]
++        instance.run_context = SimpleNamespace(messages=["hello"])
++        instance.EMPTY_OUTPUT_RETRY_ATTEMPTS = 3
++        instance.EMPTY_OUTPUT_RETRY_WAIT_MIN_S, instance.EMPTY_OUTPUT_RETRY_WAIT_MAX_S = 1, 4
++        entities = SimpleNamespace(LLMResponse=Response)
++        with patch.dict(sys.modules, {"astrbot.core.provider.entities": entities}):
++            events = [event async for event in instance._iter_llm_responses_with_fallback()]
++        return events, one, two, instance
++
++    async def exercise(self, runner):
++        install_host_compat(runner, owner="test-owner", logger=Mock())
++        try:
++            for partial, error in (("partial", AgyError("QUOTA", "safe")),
++                                   ("", AgyError("UPSTREAM", "after tool", no_retry=True, no_fallback=True))):
++                events, one, two, instance = await self.run_case(runner, partial=partial, error=error)
++                self.assertEqual((one.calls, two.calls), (1, 0))
++                self.assertEqual(events[-1].role, "err")
++                self.assertIs(instance.provider, one)
++            # Cooldown is no_retry but permits a different fallback before output.
++            events, one, two, _ = await self.run_case(runner, error=AgyError("RATE_LIMIT", "cooldown", no_retry=True))
++            self.assertEqual(two.calls, 1)
++            events, one, two, _ = await self.run_case(runner, partial="foreign", error=AgyError("QUOTA", "safe"), owned=False)
++            self.assertEqual(two.calls, 1)
++            results = await asyncio.gather(
++                self.run_case(runner, partial="partial", error=AgyError("QUOTA", "safe")),
++                self.run_case(runner))
++            self.assertEqual([result[2].calls for result in results], [0, 0])
++            self.assertEqual(results[1][0][-1].completion_text, "success")
++        finally:
++            uninstall_host_compat(runner)
++
++    async def test_partial_tool_and_preoutput_fallback_scopes(self):
++        await self.exercise(runner_type())
++
++    @unittest.skipUnless(os.environ.get("AGY_HOST_RUNNER_SOURCE"), "Optional official source not supplied")
++    async def test_official_4294_fallback_contract(self):
++        await self.exercise(runner_type(os.environ["AGY_HOST_RUNNER_SOURCE"]))
++
++    async def test_uninstall_preserves_third_party_wrappers(self):
++        runner = runner_type()
++        original = runner._iter_llm_responses
++        install_host_compat(runner, owner="test-owner", logger=Mock())
++        ours = runner._iter_llm_responses
++        def third_party(self, *args, **kwargs):
++            return ours(self, *args, **kwargs)
++        runner._iter_llm_responses = third_party
++        uninstall_host_compat(runner)
++        self.assertIs(runner._iter_llm_responses, third_party)
++        self.assertIsNot(runner._iter_llm_responses, original)
++        _, _, two, _ = await self.run_case(runner, partial="partial", error=AgyError("QUOTA", "safe"))
++        self.assertEqual(two.calls, 1)
+diff --git a/tests/test_notices.py b/tests/test_notices.py
+index cd67966..9f55c0e 100644
+--- a/tests/test_notices.py
++++ b/tests/test_notices.py
+@@ -129,7 +129,7 @@ class NoticeTests(unittest.TestCase):
+                     guard = RetryNoticeGuard()
+                     out = guard.feed(candidate) + guard.feed("", final=True)
+                     self.assertEqual(out, "")
+-                    self.assertEqual(guard.error_code, "QUOTA")
++                    self.assertEqual(guard.error_code, "RATE_LIMIT")
+ 
+     def test_retry_notice_split_across_chunks_never_leaks(self):
+         for prefix in ("⚠", "⚠️"):
+@@ -220,7 +220,7 @@ class NoticeTests(unittest.TestCase):
+             self.assertEqual(guard.feed(ch), "")
+         with self.assertRaises(AgyError) as caught:
+             guard.feed("", final=True)
+-        self.assertEqual(caught.exception.code, "QUOTA")
++        self.assertEqual(caught.exception.code, "RATE_LIMIT")
+ 
+         # Retry line followed by normal text passes cleanly through _AgentTextGuard.
+         normal = "⚠ API error (attempt 1): unexpected eof\n正常回复"
+diff --git a/tests/test_paths.py b/tests/test_paths.py
+new file mode 100644
+index 0000000..b91a5c0
+--- /dev/null
++++ b/tests/test_paths.py
+@@ -0,0 +1,174 @@
++import ntpath
++import os
++import shutil
++import tempfile
++import unittest
++from pathlib import Path, PureWindowsPath
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, patch
++
++from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
++
++from agy_provider.config import Settings
++from agy_provider.login import LoginFlow
++from agy_provider.paths import windows_long_path
++from agy_provider.probe import probe
++from agy_provider.process import AGENT_NAME, LaunchInfo, launch_args, make_home
++from agy_provider.sessions import Runtime, Session
++
++
++class PathTests(unittest.TestCase):
++    def test_non_windows_paths_are_unchanged(self):
++        path = Path("relative") / ".." / "data"
++        with patch("agy_provider.paths.os", SimpleNamespace(name="posix")):
++            self.assertIs(windows_long_path(path), path)
++
++    def test_windows_drive_unc_and_namespace_paths(self):
++        # Exercise Windows spelling on every CI platform without changing the
++        # real os.name (which would also change pathlib and tempfile behavior).
++        windows_os = SimpleNamespace(name="nt", fspath=os.fspath, path=ntpath)
++        cases = (
++            (r"C:\data", r"\\?\C:\data"),
++            ("C:/宿主 dir/old/../data", "\\\\?\\C:\\宿主 dir\\data"),
++            (r"\\server\share\old\..\data", r"\\?\UNC\server\share\data"),
++            (r"\\?\C:\data", r"\\?\C:\data"),
++            (r"\\?\UNC\server\share\data", r"\\?\UNC\server\share\data"),
++            (r"\\.\C:\data", r"\\.\C:\data"),
++        )
++        with (
++            patch("agy_provider.paths.os", windows_os),
++            patch("agy_provider.paths.Path", PureWindowsPath),
++        ):
++            for source, expected in cases:
++                with self.subTest(source=source):
++                    result = windows_long_path(PureWindowsPath(source))
++                    self.assertEqual(str(result), expected)
++                    self.assertIs(windows_long_path(result), result)
++
++
++@unittest.skipUnless(os.name == "nt", "Requires Windows filesystem semantics")
++class WindowsPathTests(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        directory = tempfile.mkdtemp(prefix="agy paths 中文 ")
++        if directory.startswith("\\\\?\\UNC\\"):
++            directory = "\\\\" + directory[8:]
++        elif directory.startswith("\\\\?\\"):
++            directory = directory[4:]
++        self.base = Path(directory)
++        self.addCleanup(shutil.rmtree, windows_long_path(self.base))
++
++    def root_for_agent_length(self, length):
++        # mkdtemp's session- prefix plus eight random characters, followed by
++        # the custom agent file. Keep each component well below its own limit.
++        tail = Path("session-xxxxxxxx") / "config" / "plugins" / AGENT_NAME
++        tail = tail / "agents" / f"{AGENT_NAME}.md"
++        target = length - len(str(tail)) - 1
++        root = self.base
++        if target - len(str(root)) < 2:
++            self.skipTest("TEMP is too deep for this exact boundary case")
++        while target - len(str(root)) > 48:
++            root /= "d" * 32
++        return root / ("d" * (target - len(str(root)) - 1))
++
++    def test_relative_paths_are_normalized_before_prefixing(self):
++        for source in ("relative/../data", "\\data", "C:relative"):
++            with self.subTest(source=source):
++                path = Path(source)
++                absolute = Path(os.path.abspath(path))
++                self.assertEqual(
++                    windows_long_path(path), windows_long_path(absolute)
++                )
++                self.assertNotIn("..", windows_long_path(path).parts)
++
++    def test_agent_files_across_max_path_boundary(self):
++        for length in (259, 260, 400, 800):
++            with self.subTest(length=length):
++                root = self.root_for_agent_length(length)
++                home = make_home(root, "test persona")
++                agent = home / "config" / "plugins" / AGENT_NAME
++                agent = agent / "agents" / f"{AGENT_NAME}.md"
++                self.assertTrue(str(home).startswith("\\\\?\\"))
++                prefix_length = len(str(windows_long_path(root))) - len(str(root))
++                self.assertEqual(len(str(agent)) - prefix_length, length)
++                self.assertIn("test persona", agent.read_text(encoding="utf-8"))
++                self.assertTrue((agent.parent.parent / "plugin.json").is_file())
++                self.assertTrue((home / "agy" / "settings.json").is_file())
++                args = launch_args(LaunchInfo("agy.exe", "1.5.9", False), home)
++                self.assertEqual(args[args.index("--gemini-dir") + 1], str(home))
++                shutil.rmtree(home)
++                self.assertFalse(home.exists())
++
++    def test_tools_persona_and_auth_bridge_keep_extended_home(self):
++        root = self.root_for_agent_length(600)
++        with patch("agy_provider.process.bridge_auth") as bridge:
++            home = make_home(root, "tools persona", True, settings=Settings())
++        bridge.assert_called_once_with(home)
++        self.assertIn(
++            "tools persona",
++            (home / "workspace" / "AGENTS.md").read_text(encoding="utf-8"),
++        )
++        self.assertFalse((home / "config").exists())
++
++    def test_write_failure_removes_deep_session(self):
++        root = self.root_for_agent_length(600)
++        with patch.object(Path, "write_text", side_effect=OSError("write failed")):
++            with self.assertRaisesRegex(OSError, "write failed"):
++                make_home(root, "test persona")
++        self.assertEqual(list(windows_long_path(root).iterdir()), [])
++
++    async def test_runtime_removes_deep_session_and_runtime_root(self):
++        root = self.root_for_agent_length(600)
++        runtime = Runtime(Settings(auth_bridge=False), root)
++        self.addAsyncCleanup(runtime.close)
++        home = make_home(runtime.root, "test persona")
++        runtime.sessions["test"] = Session(home=home)
++        await runtime.close()
++        self.assertFalse(home.exists())
++        self.assertFalse(runtime.root.exists())
++
++    async def test_probe_custom_root_and_cleanup(self):
++        root = self.root_for_agent_length(600)
++        client = SimpleNamespace(
++            proc=None,
++            start=AsyncMock(),
++            # probe() treats an empty catalog as NO_MODELS and stays blocked, so
++            # the stub must advertise at least one Gemini entry.
++            new_session=AsyncMock(
++                return_value={
++                    "models": {
++                        "currentModelId": "gemini-4-hydrogen-high",
++                        "availableModels": [
++                            {
++                                "modelId": "gemini-4-hydrogen-high",
++                                "name": "Gemini 4 Hydrogen (High)",
++                            }
++                        ],
++                    }
++                }
++            ),
++            close=AsyncMock(),
++            capabilities={},
++        )
++        with (
++            patch(
++                "agy_provider.probe.discover",
++                AsyncMock(return_value=LaunchInfo("agy.exe", "1.5.9", False)),
++            ),
++            patch("agy_provider.probe.AcpClient", return_value=client),
++        ):
++            report = await probe(Settings(auth_bridge=False), root=root)
++        self.assertEqual(report["status"], "passed")
++        argv, cwd = client.start.call_args.args
++        self.assertTrue(argv[argv.index("--gemini-dir") + 1].startswith("\\\\?\\"))
++        self.assertTrue(str(cwd).startswith("\\\\?\\"))
++        client.new_session.assert_awaited_once_with(cwd)
++        self.assertEqual(list(windows_long_path(root).iterdir()), [])
++
++    def test_login_temp_directory_keeps_extended_root(self):
++        root = self.root_for_agent_length(600)
++        flow = LoginFlow(Settings(), root, AsyncMock())
++        flow.root.mkdir(parents=True)
++        with tempfile.TemporaryDirectory(prefix="login-", dir=flow.root) as directory:
++            self.assertTrue(directory.startswith("\\\\?\\"))
++            self.assertTrue(Path(directory).is_dir())
++        self.assertEqual(list(flow.root.iterdir()), [])
+diff --git a/tests/test_process_hardening.py b/tests/test_process_hardening.py
+new file mode 100644
+index 0000000..16e0ca9
+--- /dev/null
++++ b/tests/test_process_hardening.py
+@@ -0,0 +1,123 @@
++"""Process ownership, cancellation and actual Windows job cleanup."""
++
++import asyncio
++import ctypes
++import os
++import sys
++import unittest
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock, patch
++
++from agy_provider.errors import AgyError
++from agy_provider.process import capture, spawn, stop_process
++
++
++class ProcessTests(unittest.IsolatedAsyncioTestCase):
++    @unittest.skipUnless(os.name == "nt", "Windows host crash")
++    async def test_host_abrupt_exit_closes_job_and_kills_owned_child(self):
++        script = """
++import asyncio, os, sys
++from agy_provider.process import spawn
++async def main():
++    proc = await spawn([sys.executable, '-c', 'import time; time.sleep(60)'])
++    print(proc.pid if proc._agy_job is not None else 0, flush=True)
++    sys.stdin.buffer.read(1)
++    os._exit(0)
++asyncio.run(main())
++"""
++        helper = await asyncio.create_subprocess_exec(
++            sys.executable, "-c", script, stdin=asyncio.subprocess.PIPE,
++            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
++            creationflags=0x08000000,
++        )
++        api = ctypes.WinDLL("kernel32", use_last_error=True)
++        api.OpenProcess.argtypes, api.OpenProcess.restype = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong], ctypes.c_void_p
++        api.WaitForSingleObject.argtypes, api.WaitForSingleObject.restype = [ctypes.c_void_p, ctypes.c_ulong], ctypes.c_ulong
++        api.CloseHandle.argtypes = [ctypes.c_void_p]
++        handle = None
++        try:
++            pid = int(await asyncio.wait_for(helper.stdout.readline(), 3))
++            self.assertGreater(pid, 0)
++            handle = api.OpenProcess(0x100000, False, pid)
++            self.assertTrue(handle)
++            helper.stdin.write(b"x")
++            await helper.stdin.drain()
++            await asyncio.wait_for(helper.wait(), 3)
++            self.assertEqual(helper.returncode, 0)
++            self.assertEqual(api.WaitForSingleObject(handle, 2000), 0)
++        finally:
++            if helper.returncode is None:
++                helper.kill()
++                await helper.wait()
++            helper.stdin.close()
++            if handle:
++                api.CloseHandle(handle)
++
++    async def test_capture_limit_and_timeout_reap_children(self):
++        for script, expected in (("print('x'*70000)", "OUTPUT_LIMIT"),
++                                 ("import time; time.sleep(30)", "TIMEOUT")):
++            with self.assertRaises(AgyError) as caught:
++                await capture([sys.executable, "-c", script], 0.2 if expected == "TIMEOUT" else 3)
++            self.assertEqual(caught.exception.code, expected)
++
++    async def test_repeated_close_shares_one_cleanup(self):
++        proc = SimpleNamespace()
++        with patch("agy_provider.process._stop_process", AsyncMock()) as cleanup:
++            await asyncio.gather(stop_process(proc), stop_process(proc), stop_process(proc))
++        cleanup.assert_awaited_once_with(proc)
++
++    async def test_repeated_spawn_cancel_does_not_abandon_child(self):
++        started, finish = asyncio.Event(), asyncio.Event()
++        child = SimpleNamespace(pid=999999)
++        async def create(*args, **kwargs):
++            started.set()
++            await finish.wait()
++            return child
++        with patch("agy_provider.process.asyncio.create_subprocess_exec", create), \
++             patch("agy_provider.process.WindowsJob.attach", return_value=None), \
++             patch("agy_provider.process.stop_process", AsyncMock()) as stop:
++            task = asyncio.create_task(spawn(["fake"]))
++            await started.wait()
++            task.cancel()
++            await asyncio.sleep(0)
++            task.cancel()
++            finish.set()
++            with self.assertRaises(asyncio.CancelledError):
++                await task
++            stop.assert_awaited_once_with(child)
++
++    @unittest.skipUnless(os.name == "nt", "Windows Job Object")
++    async def test_job_binding_failure_falls_back_without_breaking_stdio(self):
++        with patch("agy_provider.process.WindowsJob.attach", return_value=None):
++            proc = await spawn([sys.executable, "-c", "print('hello')"])
++        try:
++            self.assertIsNone(proc._agy_job)
++            self.assertEqual((await proc.communicate())[0].strip(), b"hello")
++        finally:
++            await stop_process(proc)
++
++    @unittest.skipUnless(os.name == "nt", "Windows Job Object")
++    async def test_job_kills_descendant_after_front_process_exits(self):
++        script = (
++            "import subprocess,sys,time; "
++            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
++            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
++            "print(p.pid,flush=True); time.sleep(0.5)"
++        )
++        proc = await spawn([sys.executable, "-c", script])
++        self.addAsyncCleanup(stop_process, proc)
++        self.assertIsNotNone(proc._agy_job, "Job binding failed on this environment")
++        pid = int(await asyncio.wait_for(proc.stdout.readline(), 3))
++        api = ctypes.WinDLL("kernel32", use_last_error=True)
++        api.OpenProcess.argtypes, api.OpenProcess.restype = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong], ctypes.c_void_p
++        api.WaitForSingleObject.argtypes, api.WaitForSingleObject.restype = [ctypes.c_void_p, ctypes.c_ulong], ctypes.c_ulong
++        api.CloseHandle.argtypes = [ctypes.c_void_p]
++        handle = api.OpenProcess(0x100000, False, pid)
++        self.assertTrue(handle)
++        try:
++            await asyncio.wait_for(proc.wait(), 3)
++            self.assertEqual(api.WaitForSingleObject(handle, 0), 258)  # STILL RUNNING
++            await stop_process(proc)
++            self.assertEqual(api.WaitForSingleObject(handle, 2000), 0)
++        finally:
++            api.CloseHandle(handle)
+diff --git a/tests/test_sessions.py b/tests/test_sessions.py
+index eaf9e32..735e743 100644
+--- a/tests/test_sessions.py
++++ b/tests/test_sessions.py
+@@ -77,8 +77,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with (
+@@ -127,8 +127,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-sys")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with (
+@@ -203,8 +203,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-struct")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with (
+@@ -331,8 +331,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-dual")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with (
+@@ -412,8 +412,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
+         runtime = Runtime(settings, self.root / "rt-anon")
+         self.addAsyncCleanup(runtime.close)
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with (
+diff --git a/tests/test_telemetry.py b/tests/test_telemetry.py
+index f9c2c6e..6139ca0 100644
+--- a/tests/test_telemetry.py
++++ b/tests/test_telemetry.py
+@@ -50,8 +50,8 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
+             return now
+ 
+         def run_with_scenario(scenario):
+-            def fake_launch(info, home, use_default_agent=False):
+-                args = real_launch_args(info, home, use_default_agent)
++            def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++                args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+                 return [sys.executable, str(FIXTURE), scenario, *args[1:]]
+ 
+             return patch("agy_provider.sessions.launch_args", side_effect=fake_launch)
+@@ -186,7 +186,7 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
+         buckets, cache_present = extract_acp_usage(
+             {"usage": {"inputTokens": 300, "outputTokens": 15}}
+         )
+-        self.assertEqual(buckets, {"input_other": 300, "input_cached": 0, "output": 15})
++        self.assertEqual(buckets, {"input_other": 300, "input_cached": None, "output": 15})
+         self.assertFalse(cache_present["cachedReadTokens"])
+ 
+         t = 10.0
+diff --git a/tests/test_tool_pipeline.py b/tests/test_tool_pipeline.py
+new file mode 100644
+index 0000000..1befcad
+--- /dev/null
++++ b/tests/test_tool_pipeline.py
+@@ -0,0 +1,113 @@
++import asyncio
++import copy
++import importlib
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, patch
++
++from tests import astrbot_stub  # noqa: F401
++from tests.test_tools_mode import _load_provider_module
++from agy_provider.config import Settings
++from agy_provider.errors import AgyError
++from agy_provider.messages import ConversationInput
++from agy_provider.process import LaunchInfo
++from agy_provider.sessions import Runtime
++from agy_provider.tools import ToolSnapshot
++from agy_provider.tool_turn import ToolTurn
++
++
++class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
++    async def asyncSetUp(self):
++        self.temp = tempfile.TemporaryDirectory(prefix="mcp-pipeline-")
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name)
++        self.settings = Settings(auth_bridge=False, enable_tools=True, request_timeout=5,
++                                 tool_approval_timeout=2, tool_execution_timeout=2)
++        self.snapshot = ToolSnapshot(SimpleNamespace(tools=[SimpleNamespace(
++            name="echo", active=True, description="echo", parameters={
++                "type": "object", "properties": {"value": {"type": "string"}}})]))
++        self.enterContext(patch("agy_provider.sessions.discover", AsyncMock(return_value=LaunchInfo("fake", "1.5.9", False))))
++        self.enterContext(patch("agy_provider.sessions.launch_args", return_value=[sys.executable, str(Path(__file__).with_name("fake_tool_cli.py"))]))
++
++    def turn(self, approver=None):
++        runtime = Runtime(self.settings, self.root)
++        self.addAsyncCleanup(runtime.close)
++        request = ConversationInput(system="", messages=[{"role": "user", "content": "echo"}])
++        meter = runtime.telemetry.start_turn(provider="p", session_key_raw="id", mode="tools", model="gemini-test", effort="default")
++        signal = asyncio.Event()
++        turn = ToolTurn(runtime, request, "id", "gemini-test", "default", self.snapshot, signal,
++                        approver=approver, meter=meter)
++        self.addAsyncCleanup(turn.close)
++        return runtime, turn, request, signal
++
++    async def test_real_relay_handoff_approval_result_compaction_and_permission_denial(self):
++        approver = AsyncMock(return_value=True)
++        runtime, turn, request, signal = self.turn(approver)
++        async with asyncio.timeout(5):
++            events = [event async for event in turn.events()]
++            tool = next(event for event in events if event.kind == "tools")
++            call = tool.result["call"]
++            client = tool.result["client"]
++            self.assertTrue(client.context_usage.suspected_compaction)
++            self.assertTrue(client.alive, "Must not retire before host side effect/result")
++            self.assertEqual(client.permission_errors, ["TOOL_PERMISSION_DENIED"])
++            approver.assert_awaited_once_with("echo", {"value": "中文 🦊"}, call.id)
++            continuation = ConversationInput(system="", messages=copy.deepcopy(request.messages) + [
++                {"role": "assistant", "content": "", "tool_calls": [{"id": call.id, "type": "function", "function": {
++                    "name": "echo", "arguments": '{"value":"中文 🦊"}'}}]},
++                {"role": "tool", "tool_call_id": call.id, "content": "宿主执行一次 🦊"}])
++            # Constructor does not normalize the wire argument representation.
++            from agy_provider.messages import canonical_calls
++            continuation.messages[-2]["tool_calls"] = canonical_calls(continuation.messages[-2]["tool_calls"])
++            turn.accept(continuation, "gemini-test", "default", self.snapshot, signal, approver)
++            final = [event async for event in turn.events()]
++        self.assertEqual(final[-1].text, "宿主执行一次 🦊")
++        self.assertEqual(len(runtime.telemetry.history), 1)
++        self.assertEqual(runtime.telemetry.history[-1]["tool_calls"], 1)
++        self.assertTrue(runtime.telemetry.history[-1]["upstream_compaction_detected"])
++        self.assertNotIn("id", runtime.sessions)
++        self.assertFalse(client.alive)
++
++    async def test_rejected_approval_never_hands_tool_to_executor(self):
++        approver = AsyncMock(return_value=False)
++        runtime, turn, _, _ = self.turn(approver)
++        async with asyncio.timeout(5):
++            events = [event async for event in turn.events()]
++        self.assertFalse(any(event.kind == "tools" for event in events))
++        self.assertEqual(events[-1].text, "TOOL_APPROVAL_DENIED")
++        self.assertEqual(approver.await_count, 1)
++
++    async def test_cancel_after_handoff_records_unknown_and_cleans_process(self):
++        runtime, turn, _, signal = self.turn()
++        async with asyncio.timeout(5):
++            events = [event async for event in turn.events()]
++            client = events[-1].result["client"]
++            broker = events[-1].result["broker"]
++            call = events[-1].result["call"]
++            signal.set()
++            await turn.task
++        self.assertFalse(client.alive)
++        self.assertEqual(broker.audit[call.id], "unknown")
++        self.assertFalse(broker.tasks)
++
++    async def test_provider_marks_partial_output_failure_non_replayable(self):
++        with patch.dict(sys.modules, _load_provider_module(self.root)):
++            sys.modules.pop("agy_provider.provider", None)
++            provider_module = importlib.import_module("agy_provider.provider")
++            provider_module.configure(Settings(auth_bridge=False))
++            provider = provider_module.AgyProvider({"id": "p", "model": "gemini-test"}, {"auth_bridge": False})
++            try:
++                with patch("agy_provider.sessions.launch_args", return_value=[sys.executable, str(Path(__file__).with_name("fake_cli.py")), "partial-fatal"]):
++                    chunks = []
++                    with self.assertRaises(AgyError) as caught:
++                        async for response in provider.text_chat_stream(prompt="hi", session_id="p"):
++                            chunks.append(response)
++                    self.assertTrue(caught.exception.no_fallback and caught.exception.no_retry)
++                    self.assertEqual(caught.exception.code, "QUOTA")
++                    self.assertTrue(chunks)
++            finally:
++                await provider.terminate()
++                sys.modules.pop("agy_provider.provider", None)
+diff --git a/tests/test_tools_mode.py b/tests/test_tools_mode.py
+index 0769fc9..765cb6a 100644
+--- a/tests/test_tools_mode.py
++++ b/tests/test_tools_mode.py
+@@ -110,9 +110,9 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
+         signal = asyncio.Event()
+         seen_homes = []
+ 
+-        def fake_launch(info, home, use_default_agent=False):
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+             seen_homes.append((home, use_default_agent))
+-            args = real_launch_args(info, home, use_default_agent)
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with patch.dict(sys.modules, stubs):
+@@ -198,8 +198,8 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
+         func_tool = SimpleNamespace(tools=[_tool("calc")])
+         signal = asyncio.Event()
+ 
+-        def fake_launch(info, home, use_default_agent=False):
+-            args = real_launch_args(info, home, use_default_agent)
++        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
++            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+ 
+         with patch.dict(sys.modules, stubs):
+diff --git a/tests/test_upstream_notice_filter.py b/tests/test_upstream_notice_filter.py
+index 4181c74..ae30cd7 100644
+--- a/tests/test_upstream_notice_filter.py
++++ b/tests/test_upstream_notice_filter.py
+@@ -131,8 +131,8 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
+         ):
+             await self._run_stream(chunks, key="conv-only-notices")
+ 
+-        self.assertEqual(caught.exception.code, "QUOTA")
+-        self.assertIn("AGY 额度不足或容量不可用，请检查官方 CLI。", str(caught.exception))
++        self.assertEqual(caught.exception.code, "RATE_LIMIT")
++        self.assertIn("AGY 上游容量不可用，请稍后重试。", str(caught.exception))
+         warning.assert_called_once()
+         self.assertEqual(warning.call_args.args[1], 5)
+ 
+@@ -226,7 +226,7 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
+             ):
+                 with self.assertRaises(AgyError) as caught:
+                     await provider.text_chat(prompt="你好", session_id="qq-group-2")
+-            self.assertEqual(caught.exception.code, "QUOTA")
++            self.assertEqual(caught.exception.code, "RATE_LIMIT")
+         sys.modules.pop("agy_provider.provider", None)
+ 
+     async def test_acp_client_and_runtime_stream_handle_retry_only_and_retry_then_answer(self):
+@@ -235,7 +235,7 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
+ 
+         # Transport level: retry-only turns yield no text and carry agy_retry_error.
+         for scenario, expected_code in (
+-            ("retry-quota-only", "QUOTA"),
++            ("retry-quota-only", "RATE_LIMIT"),
+             ("retry-eof-only", "NETWORK"),
+             ("retry-multiline-eof-only", "NETWORK"),
+             ("retry-post-eof-only", "NETWORK"),
+diff --git a/views/setup/app.js b/views/setup/app.js
+index bda2b43..2235452 100644
+--- a/views/setup/app.js
++++ b/views/setup/app.js
+@@ -64,6 +64,11 @@ function render(data) {
+   $("install-command").value = data.environment.install_command;
+   $("facts").replaceChildren(...[
+     r.cli_version ? `CLI ${r.cli_version}` : null,
++    r.customizations_mode ? `组件模式：${r.customizations_mode}` : null,
++    r.cli_flags ? `精简参数：${r.cli_flags.include_default_customizations ? "支持（工具兼容性待验收）" : "未探测到"}` : null,
++    r.tool_bridge_transport ? `工具桥：${({loopback_hmac:"本机认证连接",unix_socket:"Unix Socket",unsupported:"当前平台不支持"})[r.tool_bridge_transport] || "未知"}` : null,
++    r.process_supervision ? `进程托管：${({windows_job:"Windows Job Object",windows_taskkill_fallback:"taskkill 回退",posix_process_group:"独立进程组"})[r.process_supervision] || "未知"}` : null,
++    r.cli_update_status ? "CLI 更新：手动管理，未检查远程最新版" : null,
+     r.proxy_mode ? `代理：${r.proxy_mode}` : null,
+     r.model_count != null ? `${r.model_count} 个可用模型` : null,
+     Number.isInteger(r.exit_code) ? `CLI 退出码：${r.exit_code}` : null,

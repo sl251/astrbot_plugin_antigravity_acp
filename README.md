@@ -7,9 +7,9 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
-![Status](https://img.shields.io/badge/Status-v0.6.0%20pending%20validation-yellow)
+![Status](https://img.shields.io/badge/Status-v0.6.0-brightgreen)
 
-> **本分支为 0.6.0 待实机验收版本**，尚未发布。已完成离线回归与 Windows 子进程/工具桥验证，结果及限制见 [PR #9 验收记录](docs/pr9-acceptance.md)。真实 AGY/完整 AstrBot 部署和组件精简 A/B 仍待验收；实施范围与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。
+> **当前正式版本 0.6.0（2026-11-15 发布）**。离线四平台回归与生产实机验收（AstrBot 4.29.4 + AGY CLI 1.5.8，含真实 429 限流风暴下的快速中断与 fallback 兜底）已完成，结果与遗留范围见 [PR #9 验收记录](docs/pr9-acceptance.md)；实施范围与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
@@ -119,7 +119,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
-- **v0.6.0（本分支，待验收）**：疑似上游压缩后终态退休、强错误提前中断、部分输出/工具失败防重放、Windows 认证 MCP 桥与 Job Object、成本分组和 CLI 能力诊断。组件精简实验默认关闭；动态 MCP 更新与 CLI 安装器未交付。
+- **v0.6.0（正式发布）**：疑似上游压缩后终态退休、强错误提前中断、部分输出/工具失败防重放、Windows 认证 MCP 桥与 Job Object、成本分组和 CLI 能力诊断。组件精简实验默认关闭；动态 MCP 更新与 CLI 安装器未交付。
 - **v0.5.3（上一正式版本）**：修复 #8：Windows 深路径宿主下首聊因 `MAX_PATH`（260 字符）被拒而报 `FileNotFoundError`；会话数据改用 Win32 扩展长度路径（`\\?\`），不再要求开启 `LongPathsEnabled`。
 - **v0.5.2**：上架审查整改：运行时日志记录器统一为宿主 `astrbot.api.logger`，删除内置 `logging` 及 `ImportError` 回退分支；无功能与配置变更。
 - **v0.5.1**：合并原计划 0.5.0 的安全会话复用、聊天/工具分流、`/agy cost` 统计和失败冷却，以及原计划 0.4.4 的 #4–#7 修复：模型列表来源绑定、配置自愈、微信 JPEG 尾部裁剪、上游重试告警过滤。0.5.0 与 0.4.4 均未单独发布；#4 的响应耗时问题仍在跟踪。
@@ -145,7 +145,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 ## 1. System Identity & Core Invariants (核心契约与安全边界)
 
-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.0`, pending validation)
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.0`)
 - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
 - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
 - **Compliance & Security Invariants (DO NOT VIOLATE)**:
@@ -169,9 +169,9 @@ flowchart LR
 - **Chat / Tools Split (`agy_tools_mode`)**: Provider `custom_extra_body.agy_tools_mode` accepts `"inherit"` (default), `"chat"`, or `"tools"`. `"chat"` always binds `--agent astrbot-chat` (`tools: []`, `excludeDefaultComponents: true`) and rejects tool history (`TOOLS_DISABLED`). `"tools"` cannot bypass plugin master `enable_tools = false` or `tool_choice = "none"`.
 - **Observability & Failure Guard**: `/agy cost` retains up to 100 turns from the last 24 hours, grouped by mode/model/outcome/warm-cold state. JSON cost logs remain opt-in (`cost_log_enabled=false`). Context occupancy (`usage_update.used/size`) is separate from billable usage; absent usage remains unknown. `EMPTY` deduplication and per-`(provider_id, model)` `QUOTA`/`RATE_LIMIT` cooldowns share the existing FailureGuard (default 60s, capped at 300s, one half-open probe). Transient 503 retry banners alone do not trip it.
 - **Context Retirement**: A same-window occupancy drop below 50% of a peak of at least 64000 is treated as suspected compaction. The current reply and tool turn finish normally; the session is then retired. Missing/invalid occupancy or model/config changes break the comparison chain. This is a heuristic, not proof of compaction or a billing estimate.
-- **Host Tool Bridge (`mcp_bridge.py`)**: POSIX uses a private mode-0600 Unix socket. Windows uses an ephemeral port bound only to `127.0.0.1`, a per-session 256-bit secret in the MCP child environment, and mutual challenge authentication. No remote listener or model HTTP proxy is added. Host approval/execution, schema checks, budgets and session isolation remain in force; idle/terminated turns reject tool calls. Offline Windows relay/tool-turn validation passes; actual AGY and full-host validation is pending.
+- **Host Tool Bridge (`mcp_bridge.py`)**: POSIX uses a private mode-0600 Unix socket. Windows uses an ephemeral port bound only to `127.0.0.1`, a per-session 256-bit secret in the MCP child environment, and mutual challenge authentication. No remote listener or model HTTP proxy is added. Host approval/execution, schema checks, budgets and session isolation remain in force; idle/terminated turns reject tool calls. Offline Windows relay/tool-turn validation passes; production full-host validation (Linux, ACP loop incl. live 429 fast-fail and fallback) is done — see docs/pr9-acceptance.md. The Windows bridge and minimal-mode A/B remain offline-verified only.
 - **Process Pool & Cleanup**: Sessions remain serialized and bounded. Linux/macOS retain separate process groups. Windows attaches a kill-on-close Job Object immediately after spawn and falls back to `taskkill /T` when unavailable. Attachment is not atomic with spawn; POSIX does not add `preexec_fn`/parent-death hooks, so host SIGKILL and unbound Windows descendants remain limitations.
-- **No Replay After Output**: Partial text/thoughts or handed-off tools cause a terminal `no_retry` + `no_fallback` failure. The existing AstrBot 4.29.4 compatibility layer also intercepts later fallback candidates before they call another provider; simply adding an exception attribute would not stop this host version. Pre-output cooldown/deduplication still permits host fallback. Other runners must honor these attributes, and missing compatibility methods produce a warning. Contract tests include the official 4.29.4 fallback method; full-host deployment validation is pending.
+- **No Replay After Output**: Partial text/thoughts or handed-off tools cause a terminal `no_retry` + `no_fallback` failure. The existing AstrBot 4.29.4 compatibility layer also intercepts later fallback candidates before they call another provider; simply adding an exception attribute would not stop this host version. Pre-output cooldown/deduplication still permits host fallback. Other runners must honor these attributes, and missing compatibility methods produce a warning. Contract tests include the official 4.29.4 fallback method; production full-host validation is done (see docs/pr9-acceptance.md). A post-429-burst fallback-stickiness observation is tracked in #10.
 
 ### 0.6.0 新配置与 CLI 管理
 

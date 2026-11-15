@@ -54,3 +54,21 @@ Windows 跳过项：POSIX 文件属主/权限检查、Unix socket 专项、官�
 ## CI
 
 修复提交推送后，以 PR 当前 HEAD 的 Regression tests 为准核对 Linux/Windows × Python 3.11/3.12 四项结果；本记录不沿用原始失败提交的结果。
+
+## 实机验收（2026-11-15，小鱼生产环境）
+
+生产环境：docker AstrBot 4.29.4（自建镜像）+ AGY CLI 1.5.8（consumer OAuth + auth bridge 部署适配），插件由 v0.5.1 覆盖部署为本分支 HEAD（8ff6513）。
+
+| 项 | 结果 |
+|---|---|
+| 容器内离线回归 | 198 项，186 通过、12 项预期跳过（Python 3.12.13），compileall 通过 |
+| 插件加载与注册 | 0.6.0 加载成功，host_compat 兼容层安装，agy_probe 保持全站主模型（fallback newapi/glm-5.2） |
+| 配置迁移 | 3 个新键由宿主自动补默认（inherit / 64000 / 50%），`command` 未变；部署目录与仓库无仓库外热修改 |
+| 宿主 provider 测试 | available / error:null（gemini-3.8-flash，两小时窗口内两次直连真实成功） |
+| 真实 429 风暴（21:24–21:34 三轮，CLI attempt 1/2 均 RESOURCE_EXHAUSTED） | notice guard 归类 RATE_LIMIT、约 12s fast-fail、冷却短路后宿主切 fallback，用户约 17s 收到回复；无用户可见失败 |
+| 工具轮 | fallback provider 下 web_search 工具调用与续轮正常；真实 Gemini 侧 MCP 续轮本次未覆盖 |
+| 会话/缓存遥测 | provider_stats 正常落库；会话复用与缓存 token 观测可见 |
+
+本轮未覆盖：minimal 模式 A/B、真实上游压缩事件、Windows 桥实机、RATE_LIMIT 冷却与 `max_concurrent` 并发排队联动。
+
+已知跟进：限流风暴结束且冷却过期后，新会话 pipeline 轮次仍静默直连 fallback（无报错、无 Switched 日志），同期直连 provider 测试正常；疑似 host_compat 层状态或宿主 runner 行为，复现步骤与证据见 #10。

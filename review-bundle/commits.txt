@@ -1,0 +1,8 @@
+8ff6513 fix: validate PR9 and repair quota, MCP encoding and Windows cleanup
+bb6aa06 feat: harden ACP sessions and add authenticated Windows MCP bridge
+05e6e6c merge: 0.5.3 —— 修复 #8 Windows 深路径首聊失败
+4766c0d docs: 补充 0.5.3 的 Windows CI 验证结果
+d84d9e3 test: 修正 probe 用例的模型目录 mock
+be68716 release: 0.5.3 —— 修复 Windows 深路径首聊失败 (#8)
+f69e3b4 fix: 修复 #8 Windows 深路径下首聊因 MAX_PATH 失败
+90a8b2a docs: 精简插件卡片描述避免在 AstrBot 列表截断

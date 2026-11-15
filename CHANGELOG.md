@@ -1,6 +1,6 @@
 # 变更记录
 
-## 0.6.0（开发分支，待独立验收）
+## 0.6.0（正式发布，2026-11-15）
 
 - 分离 ACP 上下文占用和计费 usage；同会话连续可信占用疑似压缩后，在本轮终态回收，下一轮按宿主历史重建。新增阈值配置，缺字段安全跳过。
 - 分块重试 banner 区分账号额度、持续 429、暂态 503 与致命认证错误；强信号提前结束请求。修复失败状态阻止 session/cancel 的问题；RATE_LIMIT 与 QUOTA 共用原 FailureGuard，保留各自错误码。
@@ -12,7 +12,12 @@
 - doctor/设置页显示 CLI 参数能力、组件实验状态、桥类型及实际进程托管。CLI 探测输出有界。更新仍由管理员按官方指引手动操作，远程最新版明确未检查。
 - 动态 MCP/模型热更新、CLI 自动下载安装与热替换未交付，原因与后续验收矩阵见 [实施与交接计划](docs/liftgate-hardening-plan.md)。
 
-后续验收：修复明确 quota RPC 错误漏分类、MCP relay 非 UTF-8 默认编码下 Unicode 结果失败、Windows Job 关闭后后代未完全退出导致目录清理 WinError 32 的竞态。补齐专项回归并同步旧测试夹具；本机 Windows 198 项 Python 测试中 195 通过、3 项按平台/权限跳过，设置页 12 项通过。详见 [PR #9 验收记录](docs/pr9-acceptance.md)。真实 AGY/完整宿主和性能 A/B 尚未验收，版本标识不代表已发布 Release。
+后续验收：修复明确 quota RPC 错误漏分类、MCP relay 非 UTF-8 默认编码下 Unicode 结果失败、Windows Job 关闭后后代未完全退出导致目录清理 WinError 32 的竞态。补齐专项回归并同步旧测试夹具；本机 Windows 198 项 Python 测试中 195 通过、3 项按平台/权限跳过，设置页 12 项通过。详见 [PR #9 验收记录](docs/pr9-acceptance.md)。实机验收（2026-11-15，生产 AstrBot 4.29.4 + AGY CLI 1.5.8）：覆盖部署后容器内 198 项回归通过；真实 Google 429 限流风暴下 fast-fail → fallback 兜底按设计工作（用户约 17s 收到回复）；直连 Gemini、配置迁移与会话/缓存遥测验证通过。minimal A/B、真实上游压缩事件与 Windows 桥实机仍留待后续；已知跟进：限流风暴结束后主链路可能停留在 fallback 直至重启（#10）。
+
+### 升级说明
+
+- 覆盖升级即可；新增配置键（`agy_customizations_mode`、`context_compaction_min_peak`、`context_compaction_drop_percent`）由宿主按 schema 自动补默认值，无需手改。
+- 回滚旧版本请整目录替换并清理 `__pycache__`：本版新增若干文件，仅覆盖解压会残留不兼容旧文件。
 
 ## 0.5.3（正式发布）
 
