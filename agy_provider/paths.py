@@ -1,6 +1,23 @@
-"""Shared authorized session data root for Runtime and no-generation doctor."""
+"""Shared authorized session data root and Windows filesystem paths."""
 
+import os
 from pathlib import Path
+
+
+def windows_long_path(path: Path) -> Path:
+    """Use extended-length absolute paths on Windows, without resolving links."""
+    if os.name != "nt":
+        return path
+    value = os.fspath(path)
+    if value.startswith(("\\\\?\\", "\\\\.\\")):
+        return path
+    # Normalize relative paths, separators and dot components before adding the
+    # prefix: Win32 skips that normalization for extended-length paths. Prefix
+    # even short roots, since their session files may grow beyond MAX_PATH.
+    value = os.path.abspath(value)
+    if value.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + value[2:])
+    return Path("\\\\?\\" + value)
 
 
 def plugin_data_root(base: Path | None = None) -> Path:
