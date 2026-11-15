@@ -10,7 +10,7 @@ from pathlib import Path
 from .config import Settings
 from .errors import AgyError
 from .models import catalog_names, choices, find_option, options, select
-from .paths import plugin_data_root
+from .paths import plugin_data_root, windows_long_path
 from .process import discover, launch_args, make_home
 from .transport import AcpClient
 
@@ -82,7 +82,7 @@ async def _run_probe(
     )
     report["cli_version"] = version[1] if version else "unrecognized"
     stage("isolation")
-    root = root if root is not None else plugin_data_root()
+    root = windows_long_path(root if root is not None else plugin_data_root())
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix="preflight-", dir=root) as directory:
         stage("authentication")

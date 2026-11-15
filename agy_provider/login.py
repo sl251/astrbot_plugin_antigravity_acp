@@ -8,13 +8,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .errors import AgyError
+from .paths import windows_long_path
 from .process import build_child_env, capture, discover, spawn, stop_process
 
 
 class LoginFlow:
     def __init__(self, settings, root: Path, verify):
         self.settings = settings
-        self.root = root
+        self.root = windows_long_path(root)
         self.verify = verify
         self.task = None
         self.proc = None

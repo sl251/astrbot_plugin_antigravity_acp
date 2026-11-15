@@ -12,6 +12,7 @@ from pathlib import Path
 from .auth import bridge_auth
 from .config import Settings
 from .errors import AgyError, remote_error
+from .paths import windows_long_path
 
 AGENT_NAME = "astrbot-chat"
 
@@ -256,6 +257,7 @@ def make_home(
     *,
     settings: Settings | None = None,
 ) -> Path:
+    root = windows_long_path(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     home = Path(tempfile.mkdtemp(prefix="session-", dir=root))
     try:

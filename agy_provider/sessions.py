@@ -23,6 +23,7 @@ from .messages import (
     prompt_blocks,
 )
 from .models import catalog, select
+from .paths import windows_long_path
 from .process import LaunchInfo, discover, launch_args, make_home
 from .telemetry import TelemetryTracker, TurnMeter
 from .tools import ToolBroker, ToolSnapshot
@@ -261,7 +262,7 @@ class Session:
 class Runtime:
     def __init__(self, settings: Settings, root: Path, *, clock=time.monotonic):
         self.settings = settings
-        self.root = root / ("runtime-" + uuid.uuid4().hex)
+        self.root = windows_long_path(root / ("runtime-" + uuid.uuid4().hex))
         self.sessions: dict[str, Session] = {}
         self.key_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.pool_lock = asyncio.Lock()
