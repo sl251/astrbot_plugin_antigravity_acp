@@ -27,6 +27,7 @@ class _QuotaEntry:
     expires_at: float
     origin_turn_id: str
     probe_in_flight: bool = False
+    code: str = "QUOTA"
 
 
 class FailureGuard:
@@ -102,14 +103,14 @@ class FailureGuard:
                         remaining = max(1, math.ceil(entry.expires_at - now))
                         return FailureCheckResult(
                             allowed=False,
-                            code="QUOTA",
+                            code=entry.code,
                             origin_turn_id=entry.origin_turn_id,
                             retry_after=remaining,
                         )
                     if entry.probe_in_flight:
                         return FailureCheckResult(
                             allowed=False,
-                            code="QUOTA",
+                            code=entry.code,
                             origin_turn_id=entry.origin_turn_id,
                             retry_after=1,
                         )
@@ -192,7 +193,7 @@ class FailureGuard:
     ) -> None:
         now = self.clock()
         self._prune(now)
-        if code == "QUOTA" and quota_ttl > 0:
+        if code in {"QUOTA", "RATE_LIMIT"} and quota_ttl > 0:
             cooldown = quota_ttl
             if type(retry_after) is int and retry_after > 0:
                 cooldown = min(MAX_QUOTA_COOLDOWN, max(quota_ttl, retry_after))
@@ -200,6 +201,7 @@ class FailureGuard:
                 expires_at=now + cooldown,
                 origin_turn_id=origin_turn_id,
                 probe_in_flight=False,
+                code=code,
             )
             self._quota.move_to_end(scope)
             self._prune(now)

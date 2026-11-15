@@ -13,6 +13,7 @@ from .auth import bridge_auth
 from .config import Settings
 from .errors import AgyError, remote_error
 from .paths import windows_long_path
+from .windows_job import WindowsJob
 
 AGENT_NAME = "astrbot-chat"
 
@@ -42,8 +43,8 @@ def build_child_env(settings: Settings) -> dict[str, str]:
 async def spawn(
     argv: list[str], cwd: Path | None = None, *, env: dict[str, str] | None = None
 ):
-    task = asyncio.create_task(
-        asyncio.create_subprocess_exec(
+    async def create_owned():
+        proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=cwd,
             env=env,
@@ -54,17 +55,33 @@ async def spawn(
             start_new_session=os.name == "posix",
             **({"creationflags": 0x08000000} if os.name == "nt" else {}),
         )
-    )
+        if os.name == "nt":
+            try:
+                proc._agy_job = WindowsJob.attach(proc.pid)
+            except (OSError, AttributeError):
+                proc._agy_job = None
+        return proc
+
+    task = asyncio.create_task(create_owned())
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
         # Subprocess creation may complete after cancellation. Reap that child.
-        try:
-            proc = await task
-        except (OSError, NotImplementedError):
-            pass
-        else:
-            await stop_process(proc)
+        # Repeated cancellation must not abandon an in-flight spawn either.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except (OSError, AgyError, NotImplementedError):
+                break
+        if not task.cancelled():
+            try:
+                proc = task.result()
+            except (OSError, AgyError, NotImplementedError):
+                pass
+            else:
+                await stop_process(proc)
         raise
     except PermissionError:
         raise AgyError(
@@ -93,7 +110,10 @@ async def stop_process(proc: asyncio.subprocess.Process) -> None:
     # Shield the *entire* shutdown, including Windows taskkill, and keep owning it
     # until it finishes. A lone shield would leave background cleanup behind;
     # an unshielded second await would let a repeated cancel interrupt SIGKILL.
-    cleanup = asyncio.create_task(_stop_process(proc), name="agy:stop-process")
+    cleanup = getattr(proc, "_agy_stop_task", None)
+    if cleanup is None:
+        cleanup = asyncio.create_task(_stop_process(proc), name="agy:stop-process")
+        proc._agy_stop_task = cleanup
     cancelled = None
     while True:
         try:
@@ -110,13 +130,18 @@ async def stop_process(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _stop_process(proc: asyncio.subprocess.Process) -> None:
-    # Own process group only. Windows uses taskkill /T for descendants.
+    # Closing a job also kills descendants after the front process exited.
+    job = getattr(proc, "_agy_job", None)
+    if job is not None:
+        await job.stop()
+        proc._agy_job = None
+    # Own process group only. Windows retains taskkill /T as a fallback.
     if os.name == "posix":
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    elif proc.returncode is None:
+    elif proc.returncode is None and job is None:
         try:
             killer = await asyncio.create_subprocess_exec(
                 "taskkill",
@@ -159,8 +184,22 @@ async def capture(
     argv: list[str], timeout: int, *, env: dict[str, str] | None = None
 ) -> str:
     proc = await spawn(argv, env=env)
+    async def bounded_read(reader):
+        output = bytearray()
+        while chunk := await reader.read(8192):
+            output.extend(chunk)
+            if len(output) > 65536:
+                raise AgyError("OUTPUT_LIMIT", "AGY 版本/帮助输出超过 64 KiB。")
+        return bytes(output)
+
+    readers = [asyncio.create_task(bounded_read(proc.stdout)),
+               asyncio.create_task(bounded_read(proc.stderr))]
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        if proc.stdin:
+            proc.stdin.close()
+        async with asyncio.timeout(timeout):
+            out, err = await asyncio.gather(*readers)
+            await proc.wait()
         if proc.returncode:
             error = remote_error(err.decode("utf-8", "replace"))
             error.exit_code = proc.returncode
@@ -169,7 +208,12 @@ async def capture(
     except TimeoutError:
         raise AgyError("TIMEOUT", "AGY 版本/能力检查超时。") from None
     finally:
-        await stop_process(proc)
+        try:
+            await stop_process(proc)
+        finally:
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
 
 
 @dataclass(frozen=True)
@@ -177,6 +221,7 @@ class LaunchInfo:
     binary: str
     version: str
     disable_telemetry: bool
+    include_default_customizations: bool = False
 
 
 async def discover(settings: Settings) -> LaunchInfo:
@@ -218,7 +263,10 @@ async def discover(settings: Settings) -> LaunchInfo:
         [binary, "acp", "--help"], settings.startup_timeout, env=env
     )
     required = ("--gemini-dir", "--app-data-dir", "--agent")
-    if any(flag not in help_text for flag in required):
+    if any(flag not in help_text for flag in required) or (
+        settings.agy_customizations_mode == "minimal"
+        and "--include-default-customizations" not in help_text
+    ):
         # Some releases list inherited flags only in the global help.
         help_text += await capture(
             [binary, "--help"], settings.startup_timeout, env=env
@@ -230,6 +278,7 @@ async def discover(settings: Settings) -> LaunchInfo:
         binary,
         version.strip().splitlines()[0][:120] if version.strip() else "unknown",
         "--disable-telemetry" in help_text,
+        "--include-default-customizations" in help_text,
     )
 
 
@@ -304,7 +353,8 @@ def make_home(
 
 
 def launch_args(
-    info: LaunchInfo, home: Path, use_default_agent: bool = False
+    info: LaunchInfo, home: Path, use_default_agent: bool = False,
+    *, customizations_mode: str = "inherit",
 ) -> list[str]:
     args = [
         info.binary,
@@ -316,6 +366,10 @@ def launch_args(
     ]
     if not use_default_agent:
         args.extend(["--agent", AGENT_NAME])
+    elif customizations_mode == "minimal":
+        if not info.include_default_customizations:
+            raise AgyError("UNSUPPORTED", "CLI 不支持组件精简参数；请恢复 agy_customizations_mode=inherit。")
+        args.append("--include-default-customizations=false")
     if info.disable_telemetry:
         args.append("--disable-telemetry")
     return args

@@ -64,6 +64,11 @@ function render(data) {
   $("install-command").value = data.environment.install_command;
   $("facts").replaceChildren(...[
     r.cli_version ? `CLI ${r.cli_version}` : null,
+    r.customizations_mode ? `组件模式：${r.customizations_mode}` : null,
+    r.cli_flags ? `精简参数：${r.cli_flags.include_default_customizations ? "支持（工具兼容性待验收）" : "未探测到"}` : null,
+    r.tool_bridge_transport ? `工具桥：${({loopback_hmac:"本机认证连接",unix_socket:"Unix Socket",unsupported:"当前平台不支持"})[r.tool_bridge_transport] || "未知"}` : null,
+    r.process_supervision ? `进程托管：${({windows_job:"Windows Job Object",windows_taskkill_fallback:"taskkill 回退",posix_process_group:"独立进程组"})[r.process_supervision] || "未知"}` : null,
+    r.cli_update_status ? "CLI 更新：手动管理，未检查远程最新版" : null,
     r.proxy_mode ? `代理：${r.proxy_mode}` : null,
     r.model_count != null ? `${r.model_count} 个可用模型` : null,
     Number.isInteger(r.exit_code) ? `CLI 退出码：${r.exit_code}` : null,

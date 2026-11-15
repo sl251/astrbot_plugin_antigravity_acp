@@ -1,5 +1,19 @@
 # 变更记录
 
+## 0.6.0（开发分支，待独立验收）
+
+- 分离 ACP 上下文占用和计费 usage；同会话连续可信占用疑似压缩后，在本轮终态回收，下一轮按宿主历史重建。新增阈值配置，缺字段安全跳过。
+- 分块重试 banner 区分账号额度、持续 429、暂态 503 与致命认证错误；强信号提前结束请求。修复失败状态阻止 session/cancel 的问题；RATE_LIMIT 与 QUOTA 共用原 FailureGuard，保留各自错误码。
+- 已输出内容/交接工具后禁止自动重放；扩展原生 runner 兼容层，拦截 AstrBot 4.29.4 在异常后继续调用 fallback provider 的路径。
+- 新增默认 inherit 的 `agy_customizations_mode`；minimal 仅在支持参数的 CLI 工具 Agent 启用，未做真实 MCP/A-B 验收。
+- `/agy cost` 新增上下文/压缩/快速中断摘要，以及模式、模型、结果、冷热分组。内存样本限制为 24 小时内最近 100 轮；持久日志仍默认关闭。
+- Windows 工具桥使用仅绑定 127.0.0.1 的随机端口及每会话双向挑战认证；POSIX 继续使用私有 Unix socket。拒绝非活跃 prompt 的工具调用。
+- Windows 增加 Job Object 进程树托管，失败时回退 taskkill；重复清理共享同一任务，spawn 多次取消不放弃子进程所有权。
+- doctor/设置页显示 CLI 参数能力、组件实验状态、桥类型及实际进程托管。CLI 探测输出有界。更新仍由管理员按官方指引手动操作，远程最新版明确未检查。
+- 动态 MCP/模型热更新、CLI 自动下载安装与热替换未交付，原因与后续验收矩阵见 [实施与交接计划](docs/liftgate-hardening-plan.md)。
+
+后续验收：修复明确 quota RPC 错误漏分类、MCP relay 非 UTF-8 默认编码下 Unicode 结果失败、Windows Job 关闭后后代未完全退出导致目录清理 WinError 32 的竞态。补齐专项回归并同步旧测试夹具；本机 Windows 198 项 Python 测试中 195 通过、3 项按平台/权限跳过，设置页 12 项通过。详见 [PR #9 验收记录](docs/pr9-acceptance.md)。真实 AGY/完整宿主和性能 A/B 尚未验收，版本标识不代表已发布 Release。
+
 ## 0.5.3（正式发布）
 
 Windows 深路径修复版：只调整文件系统路径处理，无功能、配置或协议行为变更。

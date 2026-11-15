@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Settings
+from .context_usage import ContextUsage
 from .errors import AgyError, classified_error, remote_error
 from .notices import RetryNoticeGuard, TerminalNoticeGuard
 from .process import build_child_env, spawn, stop_process
@@ -38,6 +39,8 @@ class _AgentTextGuard:
 
     def feed(self, text: str, *, final=False) -> str:
         text = self.retries.feed(text, final=final)
+        if self.retries.fast_fail_code:
+            raise classified_error(self.retries.fast_fail_code)
         text = self.pending + self.notices.feed(text, final=final)
         self.pending = ""
         output = []
@@ -90,6 +93,10 @@ class AcpClient:
         self.stderr_diagnostics = deque(maxlen=32)
         self.latest_usage: dict | None = None
         self.latest_usage_source: str | None = None
+        self.context_usage = ContextUsage(
+            settings.context_compaction_min_peak, settings.context_compaction_drop_percent
+        )
+        self.prompt_sent = False
 
     @property
     def alive(self) -> bool:
@@ -115,7 +122,7 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.5.3"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.6.0"},
                 },
                 self.settings.startup_timeout,
             )
@@ -127,10 +134,10 @@ class AcpClient:
             await self.close()
             raise
 
-    async def _write(self, obj: dict) -> None:
-        if self.failed:
+    async def _write(self, obj: dict, *, cancelling: bool = False) -> None:
+        if self.failed and not cancelling:
             raise self.failed
-        if not self.alive or not self.proc or not self.proc.stdin:
+        if self.closed or not self.proc or self.proc.returncode is not None or not self.proc.stdin:
             raise AgyError("TRANSPORT", "AGY 连接已关闭。")
         data = (
             json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -138,6 +145,8 @@ class AcpClient:
         async with self.write_lock:
             try:
                 self.proc.stdin.write(data)
+                if obj.get("method") == "session/prompt":
+                    self.prompt_sent = True
                 await asyncio.wait_for(
                     self.proc.stdin.drain(), self.settings.startup_timeout
                 )
@@ -178,9 +187,10 @@ class AcpClient:
             return result
         except TimeoutError:
             raise self._diagnose(
-                AgyError("TIMEOUT", f"ACP {self.stage} 超时。")
+                AgyError("TIMEOUT", f"ACP {self.stage} 超时。", stage=self.stage)
             ) from None
         except AgyError as exc:
+            exc.rpc_stage = self.stage
             if exc.code == "TRANSPORT":
                 # A wrapper may exit before stdin.drain() completes. Collect
                 # the same bounded evidence as stdout EOF before closing it.
@@ -204,6 +214,10 @@ class AcpClient:
         if not isinstance(sid, str) or not sid:
             raise AgyError("PROTOCOL", "AGY 没有返回 sessionId。")
         self.session_id = sid
+        self.context_usage = ContextUsage(
+            self.settings.context_compaction_min_peak,
+            self.settings.context_compaction_drop_percent,
+        )
         return result
 
     async def set_option(self, option: str, value: str) -> dict:
@@ -406,6 +420,12 @@ class AcpClient:
             except asyncio.QueueFull:
                 pass
         kind = update.get("sessionUpdate")
+        if kind == "usage_update":
+            self.context_usage.observe(update)
+            return
+        if kind in {"current_model_update", "config_option_update"}:
+            self.context_usage.observe({})
+            return
         if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
             raise remote_error(update.get("error", update))
         if kind in {"tool_call", "tool_call_update"}:
@@ -453,7 +473,10 @@ class AcpClient:
         self.output_bytes = 0
         self.text_guard = _AgentTextGuard()
         self.active = True
+        if self.tool_broker is not None:
+            self.tool_broker.turn_active = True
         self.prompt_terminal = False
+        self.prompt_sent = False
         self.latest_usage = None
         self.latest_usage_source = None
         self.prompt_deadline = (
@@ -476,6 +499,8 @@ class AcpClient:
 
         def prompt_finished(task):
             self.prompt_terminal = True
+            if self.tool_broker is not None:
+                self.tool_broker.turn_active = False
             if task.cancelled():
                 return
             error = task.exception()
@@ -546,6 +571,8 @@ class AcpClient:
                     getter = None
         finally:
             self.active = False
+            if self.tool_broker is not None:
+                self.tool_broker.turn_active = False
             if getter is not None:
                 getter.cancel()
                 await asyncio.gather(getter, return_exceptions=True)
@@ -557,7 +584,8 @@ class AcpClient:
                                 "jsonrpc": "2.0",
                                 "method": "session/cancel",
                                 "params": {"sessionId": self.session_id},
-                            }
+                            },
+                            cancelling=True,
                         ),
                         2,
                     )

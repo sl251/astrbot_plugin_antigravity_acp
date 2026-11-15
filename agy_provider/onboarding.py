@@ -45,6 +45,8 @@ HINTS = {
 
 def next_step(report):
     if report.get("status") == "passed":
+        if report.get("minimal_tools_status") == "unsupported":
+            return "聊天检查通过，但当前 CLI 不支持工具组件精简。请恢复 agy_customizations_mode=inherit；工具模式尚未验收。"
         return "环境与模型目录检查通过。选择模型并保存即可配置；此检查没有发送对话。"
     return HINTS.get(report.get("error_code"), "请重新检测；仍失败时用 /agy doctor 获取脱敏诊断。")
 
@@ -61,7 +63,7 @@ def environment(settings=None):
             if os.name == "nt" else
             "当前默认搜索范围：AstrBot 进程的 PATH、~/.local/bin/agy。"
         ),
-        "install_url": "https://antigravity.google/docs/getting-started",
+        "install_url": "https://antigravity.google/docs/cli/tutorial",
         "install_command": "irm https://antigravity.google/cli/install.ps1 | iex" if os.name == "nt" else "curl -fsSL https://antigravity.google/cli/install.sh | bash",
         "install_hint": (
             "请在容器内部、以 AstrBot 的运行用户安装并登录 CLI；持久保存官方认证目录。宿主机安装不等于容器可用。"
@@ -69,7 +71,7 @@ def environment(settings=None):
             "Windows：安装官方原生 agy.exe。自动搜索 PATH、%LOCALAPPDATA%\\agy\\bin 和用户 .local\\bin。"
             if os.name == "nt" else
             "Linux / macOS：按官方 CLI 安装指引操作。自动搜索 PATH 和 ~/.local/bin/agy；系统服务须使用同一运行用户。"
-        ),
+        ) + " 更新前请停止活跃对话、备份原 CLI，再按官方指引手动更新；失败时恢复旧文件并重载插件。插件不检查远程最新版、不覆盖全局 CLI。",
     }
 
 

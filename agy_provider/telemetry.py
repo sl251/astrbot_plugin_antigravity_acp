@@ -18,11 +18,13 @@ from astrbot.api import logger
 MAX_HISTORY_TURNS = 100
 MAX_TOMBSTONES = 1024
 TOMBSTONE_TTL_SECONDS = 3600
+HISTORY_TTL_SECONDS = 86400
 
 REBUILD_REASON_PRIORITY = (
     "no_identity",
     "abort",
     "previous_error",
+    "upstream_compaction_detected",
     "process_dead",
     "idle_expired",
     "pool_evicted",
@@ -62,7 +64,7 @@ def _valid_nonneg_int(value: object) -> int | None:
 
 def extract_acp_usage(
     payload: object,
-) -> tuple[dict[str, int] | None, dict[str, bool]]:
+) -> tuple[dict[str, int | None] | None, dict[str, bool]]:
     """Extract allowlisted camelCase ACP usage buckets without summing updates."""
     raw = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):
@@ -81,7 +83,7 @@ def extract_acp_usage(
     return (
         {
             "input_other": uncached + (cached_write or 0),
-            "input_cached": cached_read or 0,
+            "input_cached": cached_read,
             "output": output,
         },
         cache_fields_present,
@@ -121,7 +123,7 @@ class TurnMeter:
         self._clock = tracker.clock
         self._started_at = self._clock()
         self._finished = False
-        self._usage: dict[str, int] | None = None
+        self._usage: dict[str, int | None] | None = None
         self._usage_source: str | None = None
         self._cache_fields_present: dict[str, bool] = {
             "cachedReadTokens": False,
@@ -149,6 +151,27 @@ class TurnMeter:
         self.estimate_method: str = estimate_method
         self.tool_calls: int = 0
         self.request_sent: bool = False
+        self.rpc_stage = "idle"
+        self.fast_abort_reason: str | None = None
+        self.context = {
+            "context_used": None, "context_window_size": None,
+            "peak_context_used": None, "upstream_compaction_detected": False,
+        }
+
+    def observe_client(self, client) -> None:
+        if client is None:
+            return
+        self.request_sent = self.request_sent or getattr(client, "prompt_sent", False)
+        stage = getattr(client, "stage", "idle")
+        self.rpc_stage = stage if stage in {
+            "idle", "initialize", "session/new", "session/set_config_option", "session/prompt", "rpc"
+        } else "rpc"
+        context = getattr(client, "context_usage", None)
+        if context is not None:
+            self.context = context.summary()
+        retries = getattr(getattr(client, "text_guard", None), "retries", None)
+        code = getattr(retries, "fast_fail_code", "")
+        self.fast_abort_reason = code if code in {"QUOTA", "RATE_LIMIT", "AUTH"} else None
 
     def set_decision(
         self,
@@ -252,6 +275,9 @@ class TurnMeter:
             "estimate_method": self.estimate_method,
             "tool_calls": self.tool_calls,
             "request_sent": self.request_sent,
+            "rpc_stage": self.rpc_stage,
+            "fast_abort_reason": self.fast_abort_reason,
+            **self.context,
             "elapsed_ms": elapsed_ms,
             "status": status,
             "error_code": error_code if isinstance(error_code, str) and error_code else None,
@@ -266,7 +292,7 @@ class TelemetryTracker:
     def __init__(
         self,
         *,
-        cost_log_enabled: bool = True,
+        cost_log_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
         secret: bytes | None = None,
     ):
@@ -274,9 +300,11 @@ class TelemetryTracker:
         self.clock = clock
         self._secret = secret if secret is not None else secrets.token_bytes(32)
         self.history: deque[dict] = deque(maxlen=MAX_HISTORY_TURNS)
+        self._history_times: deque[float] = deque(maxlen=MAX_HISTORY_TURNS)
         self.tombstones: OrderedDict[str, _Tombstone] = OrderedDict()
         self.evictions: dict[str, int] = {}
         self.emitted_lines: deque[str] = deque(maxlen=MAX_HISTORY_TURNS)
+        self._emitted_times: deque[float] = deque(maxlen=MAX_HISTORY_TURNS)
 
     def opaque_tag(self, value: str | None) -> str | None:
         if not value:
@@ -312,11 +340,22 @@ class TelemetryTracker:
         )
 
     def record_turn(self, record: dict) -> None:
+        self._prune_history()
         self.history.append(record)
+        self._history_times.append(self.clock())
         if self.cost_log_enabled:
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
             self.emitted_lines.append(line)
+            self._emitted_times.append(self.clock())
             _emit_json_line(line)
+
+    def _prune_history(self) -> None:
+        cutoff = self.clock() - HISTORY_TTL_SECONDS
+        for times, records in ((self._history_times, self.history),
+                               (self._emitted_times, self.emitted_lines)):
+            while times and times[0] <= cutoff:
+                times.popleft()
+                records.popleft()
 
     def _prune_tombstones(self, now: float) -> None:
         expired = [
@@ -362,6 +401,7 @@ class TelemetryTracker:
         return item.reason
 
     def summarize(self) -> dict:
+        self._prune_history()
         turns = list(self.history)
         total = len(turns)
         sent_turns = [t for t in turns if t["request_sent"]]
@@ -409,7 +449,28 @@ class TelemetryTracker:
             reason_counts.items(), key=lambda pair: (-pair[1], pair[0])
         )
 
+        groups = {}
+        for turn in turns:
+            key = (turn["mode"], turn["model"], turn["status"],
+                   "not_sent" if not turn["request_sent"] else "warm" if turn["reused"] else "cold")
+            group = groups.setdefault(key, {
+                "mode": key[0], "model": key[1], "status": key[2], "session": key[3],
+                "turns": 0, "reported": 0, "unknown": 0, "cached_read_unknown": 0,
+                "input_other": 0, "input_cached": 0, "output": 0,
+            })
+            group["turns"] += 1
+            if turn["usage_status"] == "reported":
+                group["reported"] += 1
+                group["cached_read_unknown"] += not turn["cache_fields_present"]["cachedReadTokens"]
+                for bucket in ("input_other", "input_cached", "output"):
+                    group[bucket] += turn[bucket] or 0
+            elif turn["request_sent"]:
+                group["unknown"] += 1
+
         return {
+            "groups": list(groups.values()),
+            "compaction_turns": sum(bool(t.get("upstream_compaction_detected")) for t in turns),
+            "fast_abort_turns": sum(bool(t.get("fast_abort_reason")) for t in turns),
             "total_turns": total,
             "request_sent_turns": len(sent_turns),
             "short_circuited_turns": short_circuited,
@@ -463,12 +524,12 @@ def _pct(value: float | None) -> str:
 def format_cost_report(instances: list[dict], settings_summary: dict) -> str:
     """Format a read-only /agy cost report across active provider instances."""
     lines = [
-        "AGY 成本与会话复用统计（只读，未发送模型请求；每实例保留最近 100 轮）",
+        "AGY 成本与会话复用统计（只读，未发送模型请求；每实例保留 24 小时内最近 100 轮）",
         "全局有效配置："
         f"reuse={settings_summary.get('session_reuse_mode', 'strict')} · "
         f"history_bytes={settings_summary.get('history_bytes', 160000)} · "
         f"enable_tools={settings_summary.get('enable_tools', False)} · "
-        f"cost_log={settings_summary.get('cost_log_enabled', True)} · "
+        f"cost_log={settings_summary.get('cost_log_enabled', False)} · "
         f"empty_ttl={settings_summary.get('empty_dedupe_ttl', 30)}s · "
         f"quota_cooldown={settings_summary.get('quota_cooldown', 60)}s",
     ]
@@ -539,5 +600,18 @@ def format_cost_report(instances: list[dict], settings_summary: dict) -> str:
                 f"{reason}={count}"
                 for reason, count in sorted(summary["evictions"].items())
             )
-            lines.append(f"  会话回收次数：{ev}")
+            lines.append(f"  会话回收次数（启动以来）：{ev}")
+        lines.append(
+            f"  疑似上下文压缩={summary.get('compaction_turns', 0)} · "
+            f"强错误快速中断={summary.get('fast_abort_turns', 0)}（上下文占用不计作计费 Token）"
+        )
+        for group in summary.get("groups", [])[:20]:
+            lines.append(
+                f"  分组 {group['mode']}/{group['model']}/{group['status']}/{group['session']}："
+                f"{group['turns']} 轮，reported={group['reported']}，unknown={group['unknown']}，"
+                f"input_other={group['input_other']}，已知 input_cached={group['input_cached']}"
+                f"（缓存读取未知 {group['cached_read_unknown']} 轮），output={group['output']}"
+            )
+        if len(summary.get("groups", [])) > 20:
+            lines.append("  分组仅显示前 20 项；上述总计包含全部样本。")
     return "\n".join(lines)

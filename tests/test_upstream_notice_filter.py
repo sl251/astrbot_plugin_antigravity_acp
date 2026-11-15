@@ -131,8 +131,8 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self._run_stream(chunks, key="conv-only-notices")
 
-        self.assertEqual(caught.exception.code, "QUOTA")
-        self.assertIn("AGY 额度不足或容量不可用，请检查官方 CLI。", str(caught.exception))
+        self.assertEqual(caught.exception.code, "RATE_LIMIT")
+        self.assertIn("AGY 上游容量不可用，请稍后重试。", str(caught.exception))
         warning.assert_called_once()
         self.assertEqual(warning.call_args.args[1], 5)
 
@@ -226,7 +226,7 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.assertRaises(AgyError) as caught:
                     await provider.text_chat(prompt="你好", session_id="qq-group-2")
-            self.assertEqual(caught.exception.code, "QUOTA")
+            self.assertEqual(caught.exception.code, "RATE_LIMIT")
         sys.modules.pop("agy_provider.provider", None)
 
     async def test_acp_client_and_runtime_stream_handle_retry_only_and_retry_then_answer(self):
@@ -235,7 +235,7 @@ class SessionAndProviderNoticeTests(unittest.IsolatedAsyncioTestCase):
 
         # Transport level: retry-only turns yield no text and carry agy_retry_error.
         for scenario, expected_code in (
-            ("retry-quota-only", "QUOTA"),
+            ("retry-quota-only", "RATE_LIMIT"),
             ("retry-eof-only", "NETWORK"),
             ("retry-multiline-eof-only", "NETWORK"),
             ("retry-post-eof-only", "NETWORK"),

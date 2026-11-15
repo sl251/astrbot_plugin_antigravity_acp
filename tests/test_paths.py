@@ -129,6 +129,7 @@ class WindowsPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_custom_root_and_cleanup(self):
         root = self.root_for_agent_length(600)
         client = SimpleNamespace(
+            proc=None,
             start=AsyncMock(),
             # probe() treats an empty catalog as NO_MODELS and stays blocked, so
             # the stub must advertise at least one Gemini entry.

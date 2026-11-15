@@ -70,6 +70,8 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
     if "id" not in request:
+        if method == "session/cancel":
+            record("cancel")
         continue
     result = {}
     if method == "initialize":
@@ -133,6 +135,30 @@ for line in sys.stdin:
             block_types=[b.get("type") for b in blocks if isinstance(b, dict)],
         )
         cur = active_scenario()
+        if cur in {"context-drop", "context-grow", "strong-quota", "strong-auth", "strong-rate", "partial-fatal"}:
+            def update(value):
+                send({"method": "session/update", "params": {
+                    "sessionId": "fake-session", "update": value}})
+
+            if cur.startswith("context-"):
+                for used in (100000, 20000 if cur == "context-drop" else 110000):
+                    update({"sessionUpdate": "usage_update", "used": used, "size": 200000})
+                update({"sessionUpdate": "agent_message_chunk", "content": {
+                    "type": "text", "text": "complete answer"}})
+                send({"id": request["id"], "result": {"stopReason": "end_turn"}})
+            else:
+                update({"sessionUpdate": "usage_update", "usage": {"inputTokens": 150, "outputTokens": 1}})
+                if cur == "partial-fatal":
+                    update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial answer\n"}})
+                    time.sleep(0.05)
+                error = {"strong-quota": "Daily quota exhausted", "strong-auth": "401 UNAUTHENTICATED",
+                         "partial-fatal": "Daily quota exhausted", "strong-rate": "429 RESOURCE_EXHAUSTED"}[cur]
+                for attempt in range(1, 3 if cur == "strong-rate" else 2):
+                    for char in f"⚠ API error (attempt {attempt}): {error}\n":
+                        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": char}})
+                # Deliberately withhold prompt response. The next input must be
+                # session/cancel, proving cancellation works after reader failure.
+            continue
         if cur == "probe":
             send(
                 {

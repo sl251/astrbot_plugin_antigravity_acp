@@ -1,4 +1,25 @@
 {
+  "agy_customizations_mode": {
+    "description": "AGY 工具组件模式（实验）",
+    "type": "string",
+    "default": "inherit",
+    "options": ["inherit", "minimal"],
+    "hint": "inherit 保持原行为。minimal 仅在工具默认 Agent 加入 --include-default-customizations=false；CLI 不支持时明确报 UNSUPPORTED。MCP 兼容性与 Token 收益尚未验收，请勿默认开启。恢复 inherit 并重载即可回退；纯聊天隔离 Agent 不变。"
+  },
+  "context_compaction_min_peak": {
+    "description": "疑似上下文压缩的最小峰值",
+    "type": "int",
+    "default": 64000,
+    "slider": {"min": 16000, "max": 2000000, "step": 1000},
+    "hint": "仅比较同一 ACP 会话、同一窗口大小的连续有效 usage_update.used/size。此前峰值达到此值且占用显著下降时，本轮正常交付，结束后回收会话。范围 16000–2000000；这是启发式判断，不是计费 Token。"
+  },
+  "context_compaction_drop_percent": {
+    "description": "疑似压缩后的峰值占比阈值（%）",
+    "type": "int",
+    "default": 50,
+    "slider": {"min": 10, "max": 90, "step": 1},
+    "hint": "当前占用严格低于此前峰值的此百分比才判定疑似压缩；默认 50。缺字段、零值、异常值和窗口变化不参与比较；不使用 inputTokens 推断。范围 10–90。"
+  },
   "setup_auto_check": {
     "description": "启动时自动检查环境",
     "type": "bool",
@@ -149,7 +170,7 @@
     "description": "启用宿主工具桥（需完整工具 schema 与宿主会话）",
     "type": "bool",
     "default": false,
-    "hint": "总闸；非空工具集会启用默认 agent，实测底座明显高于纯聊天。"
+    "hint": "总闸；非空工具集启用默认 agent。POSIX 使用私有 Unix socket，Windows 使用仅绑定 127.0.0.1 的每会话认证桥；执行/审批仍交宿主，跨平台端到端验收待完成。"
   },
   "session_reuse_mode": {
     "description": "会话复用模式",
@@ -165,7 +186,7 @@
     "description": "记录每轮成本与重建原因",
     "type": "bool",
     "default": false,
-    "hint": "默认关闭以免刷日志；开启后每轮输出一行脱敏 JSON。随时可用 /agy cost 查看最近汇总。"
+    "hint": "默认关闭以免刷日志；开启后每轮输出一行脱敏 JSON。/agy cost 保留每实例 24 小时内最近 100 轮，按模式/模型/结果/冷热分组；上下文占用与计费 Token 分开，未知 usage 不当作 0。"
   },
   "empty_dedupe_ttl": {
     "description": "EMPTY 相同请求抑制秒数",
@@ -182,7 +203,7 @@
     "description": "额度/容量错误冷却秒数",
     "type": "int",
     "default": 60,
-    "hint": "合法整数范围 0–300；非法数值在加载时恢复为默认值并告警。",
+    "hint": "QUOTA 与 RATE_LIMIT 共用现有冷却及单半开探针，保留各自错误码；单次 503 重试告警不会触发冷却。范围 0–300，0 禁用；非法数值恢复默认并告警。",
     "slider": {
       "min": 0,
       "max": 300,

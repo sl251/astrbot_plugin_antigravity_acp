@@ -113,7 +113,10 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_version_help_failure_keeps_only_exit_code_and_classification(self):
         proc = SimpleNamespace(
             returncode=17,
-            communicate=AsyncMock(return_value=(b"", b"private-path FAKE-PRIVATE")),
+            stdin=None,
+            stdout=SimpleNamespace(read=AsyncMock(side_effect=[b""])),
+            stderr=SimpleNamespace(read=AsyncMock(side_effect=[b"private-path FAKE-PRIVATE", b""])),
+            wait=AsyncMock(return_value=17),
         )
         with (
             patch("agy_provider.process.spawn", AsyncMock(return_value=proc)),
