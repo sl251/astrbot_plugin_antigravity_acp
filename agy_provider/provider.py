@@ -471,6 +471,9 @@ class AgyProvider(Provider):
                 claimed_half_open = guard_check.half_open_scope
         except BaseException as exc:
             self.runtime.failure_guard.release_probe(claimed_half_open)
+            if isinstance(exc, AgyError) and meter is not None and meter.tool_calls:
+                exc.no_retry = True
+                exc.no_fallback = True
             cancelled = isinstance(exc, asyncio.CancelledError)
             code = exc.code if isinstance(exc, AgyError) else ("CANCELLED" if cancelled else "CONFIG")
             if meter is None:
@@ -481,7 +484,7 @@ class AgyProvider(Provider):
                     model=selected,
                     effort=effort if isinstance(effort, str) else "default",
                 )
-            if not (isinstance(exc, AgyError) and exc.no_retry):
+            if not meter.finished:
                 meter.finish(
                     status="cancelled" if cancelled else "error", error_code=code
                 )
@@ -580,9 +583,19 @@ class AgyProvider(Provider):
             elif isinstance(exc, AgyError):
                 exit_status = "error"
                 exit_code = exc.code
+                # Surface an explicit failure after partial delivery. Neither
+                # this provider nor callers honoring no_retry may replay it.
+                if text_parts or thoughts or handed_off or meter.tool_calls:
+                    exc.no_retry = True
+                    exc.no_fallback = True
             else:
                 exit_status = "error"
                 exit_code = "UPSTREAM"
+                if isinstance(exc, Exception) and (text_parts or thoughts or handed_off or meter.tool_calls):
+                    raise AgyError(
+                        "UPSTREAM", "本轮已输出内容或交接工具后失败；已停止，禁止自动重放。",
+                        no_retry=True, no_fallback=True,
+                    ) from None
             raise
         finally:
             await events.aclose()

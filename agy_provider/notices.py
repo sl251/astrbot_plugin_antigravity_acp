@@ -1,8 +1,39 @@
 """Recognize bounded standalone CLI notices across streaming chunks."""
 
 import re
+from enum import Enum
 
 from .errors import classified_error, remote_error
+
+
+class UpstreamState(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    ACCOUNT_QUOTA_EXHAUSTED = "ACCOUNT_QUOTA_EXHAUSTED"
+    RATE_LIMIT_OR_CAPACITY = "RATE_LIMIT_OR_CAPACITY"
+    TRANSIENT_RETRY = "TRANSIENT_RETRY"
+    AUTH_FATAL = "AUTH_FATAL"
+    AGENT_FATAL = "AGENT_FATAL"
+
+
+def classify_notice(text: str) -> UpstreamState:
+    """Only call on bounded CLI diagnostic envelopes, never answer prose."""
+    text = text.lower()
+    if re.search(
+        r"(?:daily|monthly|account|subscription|billing)[\s\S]{0,80}"
+        r"(?:quota|limit|credits?)[\s\S]{0,40}(?:exceeded|exhausted|reached|depleted)\b|"
+        r"\bquota[\s_-]+(?:exceeded|exhausted)\b|\binsufficient credits\b", text
+    ):
+        return UpstreamState.ACCOUNT_QUOTA_EXHAUSTED
+    if re.search(r"\b401\b|\bunauthenticated\b|\binvalid (?:credentials?|token)\b|"
+                 r"\bauthentication required\b|\btoken (?:has )?expired\b", text):
+        return UpstreamState.AUTH_FATAL
+    if re.search(r"\b429\b|\bresource_exhausted\b|\btoo many requests\b", text):
+        return UpstreamState.RATE_LIMIT_OR_CAPACITY
+    if re.search(r"\b503\b|\bunavailable\b|\bno capacity\b", text):
+        return UpstreamState.TRANSIENT_RETRY
+    if "agent execution terminated due to error." in text:
+        return UpstreamState.AGENT_FATAL
+    return UpstreamState.UNKNOWN
 
 
 class RetryNoticeGuard:
@@ -39,6 +70,12 @@ class RetryNoticeGuard:
         self.diagnostic = ""
         self._notice_diagnostic = ""
         self.error_code = ""
+        self.state = UpstreamState.UNKNOWN
+        self.fast_fail_code = ""
+        self.rate_limit_notices = 0
+        self._rate_counted = False
+        self._attempt = ""
+        self._last_rate_attempt = None
 
     def _possible(self, text):
         for head in self.heads:
@@ -71,6 +108,20 @@ class RetryNoticeGuard:
             self.error_code = remote_error(
                 self._notice_diagnostic, retry_notice=True
             ).code
+            self.state = classify_notice(self._notice_diagnostic)
+            if self.state == UpstreamState.ACCOUNT_QUOTA_EXHAUSTED:
+                self.fast_fail_code = "QUOTA"
+            elif self.state == UpstreamState.AUTH_FATAL:
+                self.fast_fail_code = "AUTH"
+            elif self.state == UpstreamState.RATE_LIMIT_OR_CAPACITY:
+                if not self._rate_counted and self._attempt != self._last_rate_attempt:
+                    self.rate_limit_notices += 1
+                    self._rate_counted = True
+                    self._last_rate_attempt = self._attempt
+                if self.rate_limit_notices >= 2:
+                    self.fast_fail_code = "RATE_LIMIT"
+            elif self.state == UpstreamState.TRANSIENT_RETRY:
+                self.rate_limit_notices = 0
 
     def _end_continuation(self):
         self.continuing = False
@@ -79,6 +130,9 @@ class RetryNoticeGuard:
 
     def _start_notice(self, candidate, *, can_continue):
         self._end_continuation()
+        self._rate_counted = False
+        match = re.match(r"^⚠\ufe0f? API error \(attempt ([0-9]+)\):", candidate)
+        self._attempt = match[1] if match else ""
         self.diagnostic = ""
         self._can_continue = can_continue
         self._append_diagnostic(candidate)
@@ -109,6 +163,8 @@ class RetryNoticeGuard:
             self.dropping = True
 
     def _emit(self, output, chunk):
+        if chunk.strip():
+            self.rate_limit_notices = 0
         if self.leading_blanks:
             output.append(self.leading_blanks)
             self.leading_blanks = ""

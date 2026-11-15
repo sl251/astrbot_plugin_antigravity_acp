@@ -31,6 +31,9 @@ class Settings:
     enable_images: bool = False
     session_reuse_mode: str = "strict"
     cost_log_enabled: bool = False
+    context_compaction_min_peak: int = 64000
+    context_compaction_drop_percent: int = 50
+    agy_customizations_mode: str = "inherit"
     empty_dedupe_ttl: int = 30
     quota_cooldown: int = 60
     tool_max_calls: int = 16
@@ -52,6 +55,8 @@ class Settings:
         strict. The callback receives only a field name and its safe replacement.
         """
         limits = {
+            "context_compaction_min_peak": (16000, 2000000),
+            "context_compaction_drop_percent": (10, 90),
             "tool_max_calls": (1, 128),
             "tool_max_concurrent": (1, 8),
             "tool_approval_timeout": (1, 300),
@@ -90,6 +95,10 @@ class Settings:
         if not isinstance(reuse_mode, str) or reuse_mode not in {"strict", "structured"}:
             raise AgyError("CONFIG", "session_reuse_mode 应为 strict/structured。")
         parsed["session_reuse_mode"] = reuse_mode
+        customizations = values.get("agy_customizations_mode", defaults.agy_customizations_mode)
+        if not isinstance(customizations, str) or customizations not in {"inherit", "minimal"}:
+            raise AgyError("CONFIG", "agy_customizations_mode 应为 inherit/minimal。")
+        parsed["agy_customizations_mode"] = customizations
         mode = values.get("proxy_mode", defaults.proxy_mode)
         proxy_url = values.get("proxy_url", defaults.proxy_url)
         if not isinstance(mode, str) or mode not in {"inherit", "custom", "direct"}:

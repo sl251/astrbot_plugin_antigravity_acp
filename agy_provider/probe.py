@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -48,6 +49,10 @@ async def probe(
         "model_prompt_sent": False,
         "mcp_loading": "not_tested",
         "host_tool_loop": "not_tested",
+        "cli_update_status": "not_checked",
+        "cli_update_policy": "manual_external",
+        "tool_bridge_transport": "loopback_hmac" if os.name == "nt" else "unix_socket" if os.name == "posix" else "unsupported",
+        "customizations_mode": settings.agy_customizations_mode,
     }
     try:
         async with asyncio.timeout(settings.startup_timeout):
@@ -81,6 +86,14 @@ async def _run_probe(
         re.IGNORECASE,
     )
     report["cli_version"] = version[1] if version else "unrecognized"
+    report["cli_flags"] = {
+        "disable_telemetry": info.disable_telemetry,
+        "include_default_customizations": info.include_default_customizations,
+    }
+    report["minimal_tools_status"] = (
+        "inactive" if settings.agy_customizations_mode == "inherit" else
+        "flag_available_unverified" if info.include_default_customizations else "unsupported"
+    )
     stage("isolation")
     root = windows_long_path(root if root is not None else plugin_data_root())
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -93,6 +106,10 @@ async def _run_probe(
         try:
             stage("initialize")
             await client.start(launch_args(info, home), home / "workspace")
+            report["process_supervision"] = (
+                "windows_job" if getattr(client.proc, "_agy_job", None) is not None
+                else "windows_taskkill_fallback" if os.name == "nt" else "posix_process_group"
+            )
             report["protocol_version"] = 1
             report["advertised_capabilities"] = capability_summary(client.capabilities)
             stage("session/new")

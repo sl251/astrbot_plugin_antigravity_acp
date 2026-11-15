@@ -7,7 +7,9 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
-![Status](https://img.shields.io/badge/Status-Active%20(v0.5.3)-brightgreen)
+![Status](https://img.shields.io/badge/Status-v0.6.0%20pending%20validation-yellow)
+
+> **本分支为 0.6.0 待验收版本**，尚未发布。参考 LiftGate 的实施范围、明确延期项、测试交接与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。按作者要求未执行功能测试或真实 AGY 请求。
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
@@ -117,7 +119,8 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(详细技术变更见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
-- **v0.5.3（当前版本）**：修复 #8：Windows 深路径宿主下首聊因 `MAX_PATH`（260 字符）被拒而报 `FileNotFoundError`；会话数据改用 Win32 扩展长度路径（`\\?\`），不再要求开启 `LongPathsEnabled`。
+- **v0.6.0（本分支，待验收）**：疑似上游压缩后终态退休、强错误提前中断、部分输出/工具失败防重放、Windows 认证 MCP 桥与 Job Object、成本分组和 CLI 能力诊断。组件精简实验默认关闭；动态 MCP 更新与 CLI 安装器未交付。
+- **v0.5.3（上一正式版本）**：修复 #8：Windows 深路径宿主下首聊因 `MAX_PATH`（260 字符）被拒而报 `FileNotFoundError`；会话数据改用 Win32 扩展长度路径（`\\?\`），不再要求开启 `LongPathsEnabled`。
 - **v0.5.2**：上架审查整改：运行时日志记录器统一为宿主 `astrbot.api.logger`，删除内置 `logging` 及 `ImportError` 回退分支；无功能与配置变更。
 - **v0.5.1**：合并原计划 0.5.0 的安全会话复用、聊天/工具分流、`/agy cost` 统计和失败冷却，以及原计划 0.4.4 的 #4–#7 修复：模型列表来源绑定、配置自愈、微信 JPEG 尾部裁剪、上游重试告警过滤。0.5.0 与 0.4.4 均未单独发布；#4 的响应耗时问题仍在跟踪。
 - **v0.4.3**：过滤上游 CLI 容量不足时输出的 `503 UNAVAILABLE` 告警行，纯告警轮次转为 `QUOTA` 交给 AstrBot fallback。
@@ -142,7 +145,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 ## 1. System Identity & Core Invariants (核心契约与安全边界)
 
-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.5.3`)
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.0`, pending validation)
 - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
 - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
 - **Compliance & Security Invariants (DO NOT VIOLATE)**:
@@ -157,16 +160,31 @@ flowchart LR
   U[Messaging Platform / WebUI] --> R[AstrBot Runner]
   R -->|Stream / Non-stream Request| P[Provider: agy_acp]
   P -->|ACP over stdio| A["agy acp (Isolated Session Subprocess)"]
-  A -->|MCP tools/call| B["mcp_bridge.py (Local Unix Socket)"]
+  A -->|MCP tools/call| B["mcp_bridge.py (Unix Socket / Authenticated Loopback)"]
   B -->|Yield & Execute via FunctionToolExecutor| R
 ```
 
 - **Session Binding Key**: `(provider_instance_id, astrbot_session_id, conversation_id)`.
 - **History Prefix Matching & Dual-Ledger Reuse**: Maintains separated `host_expected` and `sent_window` ledgers with `compare_history` (`exact` / `host_trim` / `rewrite` / `append_gap` / `unknown`). Defaults to `session_reuse_mode = "strict"`; when configured to `"structured"` and the host supplies validated `agy_context_parts`, transient data is attached to user turns instead of invalidating the live system prompt (otherwise falls back to strict comparison).
 - **Chat / Tools Split (`agy_tools_mode`)**: Provider `custom_extra_body.agy_tools_mode` accepts `"inherit"` (default), `"chat"`, or `"tools"`. `"chat"` always binds `--agent astrbot-chat` (`tools: []`, `excludeDefaultComponents: true`) and rejects tool history (`TOOLS_DISABLED`). `"tools"` cannot bypass plugin master `enable_tools = false` or `tool_choice = "none"`.
-- **Observability & Failure Guard**: Emits one HMAC-anonymized JSON telemetry line (`event: "agy.turn"`, INFO level) per ACP turn and supports read-only `/agy cost`. Short-term guards deduplicate identical `EMPTY` requests (`empty_dedupe_ttl`, default 30s) and enforce per-`(provider_id, model)` `QUOTA` cooldowns (`quota_cooldown`, default 60s, capped at 300s) with single half-open probe recovery; never caches successful responses.
-- **Host Tool Bridge (`mcp_bridge.py`)**: When `enable_tools=true`, host tools (`FunctionTool`, `MCPTool`, `HandoffTool`, and direct-send plugins like TTS returning `None`) are exposed to `agy acp` via a local Unix Socket MCP server. Automatically adapts AstrBot `skills_like` mode to `full` mode.
-- **Process Pool & Cleanup**: Intra-session requests are serialized; cross-session requests run in parallel up to `max_concurrency`. Idle sessions are reaped via LRU pool. Process trees are terminated via process groups on Linux/macOS and `taskkill /T` on Windows.
+- **Observability & Failure Guard**: `/agy cost` retains up to 100 turns from the last 24 hours, grouped by mode/model/outcome/warm-cold state. JSON cost logs remain opt-in (`cost_log_enabled=false`). Context occupancy (`usage_update.used/size`) is separate from billable usage; absent usage remains unknown. `EMPTY` deduplication and per-`(provider_id, model)` `QUOTA`/`RATE_LIMIT` cooldowns share the existing FailureGuard (default 60s, capped at 300s, one half-open probe). Transient 503 retry banners alone do not trip it.
+- **Context Retirement**: A same-window occupancy drop below 50% of a peak of at least 64000 is treated as suspected compaction. The current reply and tool turn finish normally; the session is then retired. Missing/invalid occupancy or model/config changes break the comparison chain. This is a heuristic, not proof of compaction or a billing estimate.
+- **Host Tool Bridge (`mcp_bridge.py`)**: POSIX uses a private mode-0600 Unix socket. Windows uses an ephemeral port bound only to `127.0.0.1`, a per-session 256-bit secret in the MCP child environment, and mutual challenge authentication. No remote listener or model HTTP proxy is added. Host approval/execution, schema checks, budgets and session isolation remain in force; idle/terminated turns reject tool calls. Windows end-to-end validation is still pending.
+- **Process Pool & Cleanup**: Sessions remain serialized and bounded. Linux/macOS retain separate process groups. Windows attaches a kill-on-close Job Object immediately after spawn and falls back to `taskkill /T` when unavailable. Attachment is not atomic with spawn; POSIX does not add `preexec_fn`/parent-death hooks, so host SIGKILL and unbound Windows descendants remain limitations.
+- **No Replay After Output**: Partial text/thoughts or handed-off tools cause a terminal `no_retry` + `no_fallback` failure. The existing AstrBot 4.29.4 compatibility layer also intercepts later fallback candidates before they call another provider; simply adding an exception attribute would not stop this host version. Pre-output cooldown/deduplication still permits host fallback. Other runners must honor these attributes, and missing compatibility methods produce a warning. Real host validation is pending.
+
+### 0.6.0 新配置与 CLI 管理
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `agy_customizations_mode` | `inherit` | `minimal` 仅在工具默认 Agent 加入 `--include-default-customizations=false`；不支持时明确 UNSUPPORTED。未做 MCP/A-B 验收，不建议默认启用。 |
+| `context_compaction_min_peak` | `64000` | 疑似压缩判断的最小峰值，范围 16000–2000000。 |
+| `context_compaction_drop_percent` | `50` | 当前占用严格低于峰值的此百分比才判断疑似压缩，范围 10–90。 |
+
+`history_bytes=160000`、`max_concurrent=2`、`max_sessions=4`、工具/图片总闸与严格复用默认值保持原样。
+doctor 与首次设置页显示 CLI 版本、参数支持、组件实验状态、本地工具桥和实际进程托管。
+远程最新版状态明确为未检查；插件不会下载、安装、热替换 CLI，也没有自动更新/回滚承诺。管理员可按 [官方 CLI 指引](https://antigravity.google/docs/cli/tutorial) 在停止活跃请求并备份旧文件后手动更新，失败时恢复原文件并重载插件。
+组件实验回退只需恢复 `inherit` 并重载；整体回滚与待测矩阵见 [实施交接](docs/liftgate-hardening-plan.md)。
 
 ## 3. File Layout (目录结构)
 

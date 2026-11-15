@@ -409,6 +409,7 @@ class Runtime:
                     info,
                     session.home,
                     use_default_agent=bool(snapshot and snapshot.tools),
+                    customizations_mode=self.settings.agy_customizations_mode,
                 ),
                 session.home / "workspace",
             )
@@ -478,6 +479,7 @@ class Runtime:
             completed = False
             failure_exc: BaseException | None = None
             cancelled = False
+            generation_started = False
             try:
                 if not continuation and provider_id:
                     check = await self.failure_guard.check_empty_only(
@@ -511,6 +513,10 @@ class Runtime:
                     snapshot,
                     temporary=temporary,
                     tombstone=tombstone,
+                )
+                local_meter.set_decision(
+                    reused=decision.reuse, reasons=decision.reasons,
+                    history_relation=decision.history_relation,
                 )
                 context = request.prompt_context
                 if decision.reuse:
@@ -584,10 +590,14 @@ class Runtime:
                     session.broker.notifications.clear()
                     session.broker.error = None
                 text_parts = []
-                local_meter.request_sent = True
+                # Reset before a reused client's next turn, including errors
+                # before its async generator starts writing the prompt.
+                session.client.prompt_sent = False
+                generation_started = True
                 turn = tool_events(session.client, prompt, session.broker)
                 try:
                     async for event in turn:
+                        local_meter.observe_client(session.client)
                         if event.kind == "usage":
                             payload = event.result or {}
                             local_meter.observe_usage(
@@ -622,8 +632,8 @@ class Runtime:
                                         stripped_notices,
                                     )
                                     raise AgyError(
-                                        "QUOTA",
-                                        "AGY 额度不足或容量不可用，请检查官方 CLI。",
+                                        "RATE_LIMIT",
+                                        "AGY 上游容量不可用，请稍后重试。",
                                     )
                                 raise AgyError("EMPTY", "AGY 没有返回正文。")
                             if stripped_notices:
@@ -670,14 +680,24 @@ class Runtime:
                 raise
             except BaseException as exc:
                 failure_exc = exc
+                if isinstance(exc, AgyError) and exc.rpc_stage != "idle":
+                    local_meter.rpc_stage = exc.rpc_stage
                 raise
             finally:
+                if generation_started:
+                    local_meter.observe_client(session.client)
                 # Partial/cancelled turns never become a reusable history prefix.
-                short_circuited = isinstance(failure_exc, AgyError) and failure_exc.no_retry
+                short_circuited = (
+                    isinstance(failure_exc, AgyError) and failure_exc.no_retry
+                    and not local_meter.request_sent
+                )
                 if short_circuited:
                     self.failure_guard.release_probe(claimed_half_open)
                 elif not completed:
-                    latest_usage = getattr(session.client, "latest_usage", None)
+                    latest_usage = (
+                        getattr(session.client, "latest_usage", None)
+                        if generation_started and local_meter.request_sent else None
+                    )
                     if latest_usage is not None:
                         latest_source = (
                             getattr(session.client, "latest_usage_source", None)
@@ -724,6 +744,12 @@ class Runtime:
                         status="cancelled" if cancelled else "error",
                         error_code=error_code,
                     )
+                    await session.close()
+                elif local_meter.context["upstream_compaction_detected"]:
+                    # Delivery/host tool continuations have reached a terminal
+                    # state. Never retire midway through a tool side effect.
+                    if not temporary and not self.stopped:
+                        self.telemetry.record_eviction(key, "upstream_compaction_detected")
                     await session.close()
 
     async def _sweep(self) -> None:

@@ -8,9 +8,12 @@ import asyncio
 import copy
 import inspect
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any
+
+from .errors import AgyError
 
 
 @dataclass
@@ -22,9 +25,101 @@ class _Patch:
     enabled: bool = True
     reset_wrapper: Any = None
     step_wrapper: Any = None
+    responses: Any = None
+    fallback: Any = None
+    responses_wrapper: Any = None
+    fallback_wrapper: Any = None
 
 
 _patches: dict[type, _Patch] = {}
+_replay_scope: ContextVar[Any] = ContextVar("agy_replay_scope", default=None)
+
+
+def _install_replay_guard(runner_cls, state):
+    """4.29.4 catches all Exception instances even after stream output.
+
+    Keep its native fallback policy before output. After an ACP no-replay
+    failure, intercept subsequent candidates at the request boundary, so none
+    of their providers are called. Do not mutate the configured candidate list.
+    """
+    state.responses = getattr(runner_cls, "_iter_llm_responses", None)
+    state.fallback = getattr(runner_cls, "_iter_llm_responses_with_fallback", None)
+    if not callable(state.responses) or not callable(state.fallback):
+        state.logger.warning("AGY 宿主缺少 fallback 兼容接口，不能保证外部 fallback 不重放；请禁用宿主 fallback。")
+        return
+
+    @wraps(state.responses)
+    def responses_wrapper(self, *args, **kwargs):
+        scope = _replay_scope.get()
+        if not state.enabled or scope is None or scope["runner"] is not self:
+            return state.responses(self, *args, **kwargs)
+
+        async def guarded():
+            if scope["blocked"] is not None:
+                from astrbot.core.provider.entities import LLMResponse
+
+                yield LLMResponse(role="err", completion_text=str(scope["blocked"]))
+                return
+            provider = getattr(self, "provider", None)
+            source = state.responses(self, *args, **kwargs)
+            emitted = False
+            try:
+                async for response in source:
+                    emitted = emitted or bool(
+                        getattr(response, "completion_text", "")
+                        or getattr(response, "reasoning_content", "")
+                        or getattr(response, "tools_call_ids", None)
+                    )
+                    yield response
+            except AgyError as exc:
+                if _owned(provider, state) and (exc.no_fallback or emitted):
+                    exc.no_retry = True
+                    exc.no_fallback = True
+                    scope["blocked"] = exc
+                    scope["provider"] = provider
+                raise
+            finally:
+                await source.aclose()
+
+        return guarded()
+
+    @wraps(state.fallback)
+    def fallback_wrapper(self, *args, **kwargs):
+        providers = [getattr(self, "provider", None),
+                     *(getattr(self, "fallback_providers", None) or [])]
+        source = state.fallback(self, *args, **kwargs)
+        if not any(_owned(provider, state) for provider in providers):
+            return source
+
+        async def guarded():
+            scope = {"runner": self, "blocked": None, "provider": None}
+            try:
+                while True:
+                    # Set/reset around each advance, never across a yield:
+                    # hosts may advance a generator from different tasks.
+                    token = _replay_scope.set(scope)
+                    try:
+                        response = await anext(source)
+                    except StopAsyncIteration:
+                        return
+                    finally:
+                        _replay_scope.reset(token)
+                    if scope["blocked"] is not None:
+                        self.provider = scope["provider"]
+                    yield response
+            finally:
+                try:
+                    await source.aclose()
+                finally:
+                    if scope["blocked"] is not None:
+                        self.provider = scope["provider"]
+
+        return guarded()
+
+    state.responses_wrapper = responses_wrapper
+    state.fallback_wrapper = fallback_wrapper
+    runner_cls._iter_llm_responses = responses_wrapper
+    runner_cls._iter_llm_responses_with_fallback = fallback_wrapper
 
 
 def _owned(provider, state):
@@ -162,6 +257,7 @@ def install_host_compat(runner_cls=None, *, owner=None, logger):
     state.reset_wrapper, state.step_wrapper = reset_wrapper, step_wrapper
     _patches[runner_cls] = state
     runner_cls.reset, runner_cls.step_until_done = reset_wrapper, step_wrapper
+    _install_replay_guard(runner_cls, state)
     state.logger.info(
         "AGY ACP 原生 runner 兼容已安装：仅本插件 provider 使用 full、独立 run 身份和结束清理。"
     )
@@ -185,6 +281,10 @@ def uninstall_host_compat(runner_cls=None):
         runner_cls.reset = state.reset
     if runner_cls.step_until_done is state.step_wrapper:
         runner_cls.step_until_done = state.step
+    if state.responses_wrapper is not None and runner_cls._iter_llm_responses is state.responses_wrapper:
+        runner_cls._iter_llm_responses = state.responses
+    if state.fallback_wrapper is not None and runner_cls._iter_llm_responses_with_fallback is state.fallback_wrapper:
+        runner_cls._iter_llm_responses_with_fallback = state.fallback
     state.logger.info("AGY ACP 原生 runner 兼容已停用；保留第三方后装 patch。")
 
 

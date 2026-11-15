@@ -14,6 +14,8 @@ class AgyError(RuntimeError):
         retry_after: int | None = None,
         origin_turn_id: str | None = None,
         no_retry: bool = False,
+        no_fallback: bool = False,
+        stage: str = "",
     ):
         self.code = code
         self.exit_code = exit_code if type(exit_code) is int else None
@@ -26,6 +28,10 @@ class AgyError(RuntimeError):
             else None
         )
         self.no_retry = bool(no_retry)
+        self.no_fallback = bool(no_fallback)
+        self.rpc_stage = stage if stage in {
+            "initialize", "session/new", "session/set_config_option", "session/prompt", "rpc"
+        } else "idle"
         super().__init__(f"AGY [{code}] {message}")
 
 
@@ -47,7 +53,7 @@ _MESSAGES = {
         "若普通 CLI 已登录而隔离 session/new 仍失败，请检查认证桥与官方认证后端；"
         "不要复制其他用户凭据或关闭配置隔离。"
     ),
-    "QUOTA": "AGY 额度不足或容量不可用，请检查官方 CLI。",
+    "QUOTA": "AGY 账号额度不足，请检查官方 CLI 的额度状态。",
     "RATE_LIMIT": "AGY 请求受限，请稍后再试。",
     "TIMEOUT": "AGY 上游请求超时，请检查当前网络与 CLI 状态。",
     "UNSUPPORTED": "此 AGY 版本不支持所需 ACP 方法，请升级 CLI。",
@@ -87,6 +93,7 @@ def classified_error(
         retry_after=retry_after,
         origin_turn_id=origin_turn_id,
         no_retry=no_retry,
+        stage=stage,
     )
 
 
@@ -171,8 +178,10 @@ def remote_error(error: object, *, retry_notice: bool = False) -> AgyError:
             "AUTH",
             r"authentication.required|unauth|not.logged.in|sign.in|login|credential|\b401\b",
         ),
-        ("QUOTA", r"quota|exhaust|capacity|usage.limit"),
-        ("RATE_LIMIT", r"rate.limit|too.many|\b429\b"),
+        ("QUOTA", r"quota[\s_-]+(?:exceeded|exhausted)|insufficient.credits|"
+         r"(?:daily|monthly|account|subscription|billing).{0,80}(?:quota|limit|credits?).{0,40}"
+         r"(?:exceeded|exhausted|reached|depleted)"),
+        ("RATE_LIMIT", r"rate.limit|too.many|\b429\b|resource_exhausted|capacity|\b503\b"),
         ("TIMEOUT", r"timeout|timed.out|deadline"),
         ("UNSUPPORTED", r"-32601|method.not.found|not.supported"),
     )

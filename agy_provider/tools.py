@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Settings
+from .bridge_transport import BridgeTransport, TOKEN_ENV
 from .errors import AgyError
 from .messages import digest
 
@@ -338,6 +339,7 @@ class ToolBroker:
     def __init__(self, snapshot: ToolSnapshot, settings: Settings):
         self.snapshot, self.settings = snapshot, settings
         self.session_id = None
+        self.turn_active = False
         self.pending: dict[str, PendingCall] = {}
         self.audit: dict[str, str] = {}
         self.seen = set()
@@ -353,6 +355,7 @@ class ToolBroker:
         self.error = None
         self.close_task = None
         self.audit_sink = None
+        self.transport = BridgeTransport(tcp=os.name == "nt")
 
     def record_outcome(self, call):
         self.audit[call.id] = call.state
@@ -360,37 +363,43 @@ class ToolBroker:
             self.audit_sink(call.id, call.state)
 
     async def start(self):
-        if os.name != "posix":
-            raise AgyError("UNSUPPORTED", "当前工具桥需要 Unix domain socket。")
-        self.directory = Path(tempfile.mkdtemp(prefix="agy-mcp-"))
-        self.path = self.directory / "bridge.sock"
+        if os.name not in {"posix", "nt"}:
+            raise AgyError("UNSUPPORTED", "当前平台没有可用的本地工具桥。")
         try:
-            self.server = await asyncio.start_unix_server(
-                self._connection, path=self.path, limit=FRAME_LIMIT
-            )
-            self.path.chmod(0o600)
+            if self.transport.tcp:
+                self.server = await asyncio.start_server(
+                    self._connection, host="127.0.0.1", port=0, limit=FRAME_LIMIT,
+                )
+                endpoint = f"tcp:{self.server.sockets[0].getsockname()[1]}"
+            else:
+                self.directory = Path(tempfile.mkdtemp(prefix="agy-mcp-"))
+                self.path = self.directory / "bridge.sock"
+                self.server = await asyncio.start_unix_server(
+                    self._connection, path=self.path, limit=FRAME_LIMIT
+                )
+                self.path.chmod(0o600)
+                endpoint = str(self.path)
         except BaseException:
-            shutil.rmtree(self.directory, ignore_errors=True)
+            await self.close()
             raise
         return {
             "name": SERVER_NAME,
             "type": "stdio",
             "command": sys.executable,
-            "args": [str(Path(__file__).with_name("mcp_bridge.py")), str(self.path)],
-            "env": {},
+            "args": [str(Path(__file__).with_name("mcp_bridge.py")), endpoint],
+            "env": {TOKEN_ENV: self.transport.token} if self.transport.tcp else {},
         }
 
     async def _connection(self, reader, writer):
         task = asyncio.current_task()
-        if len(self.tasks) >= self.settings.tool_max_concurrent + 4:
+        if self.closed or len(self.tasks) >= self.settings.tool_max_concurrent + 4:
             writer.close()
             return
         self.tasks.add(task)
         work = eof = None
         try:
             async with asyncio.timeout(self.settings.tool_approval_timeout):
-                line = await reader.readline()
-                request = json.loads(line, parse_constant=reject_constant)
+                request = await self.transport.receive(reader, writer)
             work = asyncio.create_task(self.dispatch(request))
             eof = asyncio.create_task(reader.read(1))
             await asyncio.wait((work, eof), return_when=asyncio.FIRST_COMPLETED)
@@ -401,7 +410,7 @@ class ToolBroker:
                     reply = {"error": {"code": -32001, "message": exc.code}}
                 writer.write((json.dumps(reply, ensure_ascii=False) + "\n").encode())
                 await asyncio.wait_for(writer.drain(), 2)
-        except (ValueError, OSError, TimeoutError, asyncio.LimitOverrunError):
+        except (ValueError, OSError, TimeoutError, RecursionError, asyncio.LimitOverrunError):
             pass
         finally:
             try:
@@ -428,6 +437,8 @@ class ToolBroker:
             return {"tools": self.snapshot.tools}
         if request.get("method") != "tools/call":
             raise AgyError("TOOL_PROTOCOL", "未知工具请求。")
+        if not self.turn_active:
+            raise AgyError("TOOL_STALE", "当前没有活跃工具轮，拒绝过期调用。")
         params = request.get("params")
         if not isinstance(params, dict):
             raise AgyError("TOOL_PROTOCOL", "工具参数无效。")
@@ -609,5 +620,6 @@ class ToolBroker:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self.transport.token = ""
         if self.directory:
             shutil.rmtree(self.directory, ignore_errors=True)

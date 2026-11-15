@@ -2,16 +2,63 @@
 
 import asyncio
 import json
+import os
 import sys
+import threading
+from concurrent.futures import TimeoutError as FutureTimeout
+
+if __package__:
+    from .bridge_transport import TOKEN_ENV, connect, read_frame
+else:
+    from bridge_transport import TOKEN_ENV, connect, read_frame
 
 LIMIT = 1048576
 
 
 async def main(path):
-    reader = asyncio.StreamReader(limit=LIMIT)
-    protocol = asyncio.StreamReaderProtocol(reader)
     loop = asyncio.get_running_loop()
-    transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+    token = os.environ.pop(TOKEN_ENV, "")
+    transport = None
+    stopped = threading.Event()
+    if os.name == "nt":
+        # Windows inherited stdio handles need not support overlapped reads.
+        # A dedicated daemon reader avoids both Proactor pipe assumptions and
+        # shutdown_default_executor hanging on a cancelled blocking readline.
+        queue = asyncio.Queue(maxsize=16)
+
+        def pump():
+            while not stopped.is_set():
+                try:
+                    line = sys.stdin.buffer.readline(LIMIT + 1)
+                except OSError:
+                    line = b""
+                if stopped.is_set():
+                    return
+                try:
+                    future = asyncio.run_coroutine_threadsafe(queue.put(line), loop)
+                except RuntimeError:
+                    return
+                while not stopped.is_set():
+                    try:
+                        future.result(timeout=0.25)
+                        break
+                    except FutureTimeout:
+                        continue
+                    except BaseException:
+                        return
+                if stopped.is_set():
+                    future.cancel()
+                    return
+                if not line or len(line) > LIMIT:
+                    return
+
+        threading.Thread(target=pump, name="mcp:stdin", daemon=True).start()
+        readline = queue.get
+    else:
+        reader = asyncio.StreamReader(limit=LIMIT)
+        protocol = asyncio.StreamReaderProtocol(reader)
+        transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+        readline = reader.readline
     pending = {}
     seen = set()
 
@@ -29,17 +76,16 @@ async def main(path):
                 result = {
                     "protocolVersion": "2025-11-25",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "astrbot", "version": "0.5.3"},
+                    "serverInfo": {"name": "astrbot", "version": "0.6.0"},
                 }
             elif method == "ping":
                 result = {}
             elif method in {"tools/list", "tools/call"}:
-                source, writer = await asyncio.open_unix_connection(
-                    path, limit=16 * LIMIT
-                )
-                writer.write((json.dumps(request) + "\n").encode())
-                await writer.drain()
-                reply = json.loads(await source.readline())
+                async with asyncio.timeout(5):
+                    source, writer = await connect(path, request, token)
+                # Covers maximum configured host approval + execution budgets.
+                async with asyncio.timeout(2110):
+                    reply = await read_frame(source, 16 * LIMIT)
                 send({"id": ident, **reply})
                 return
             else:
@@ -51,7 +97,7 @@ async def main(path):
                 )
                 return
             send({"id": ident, "result": result})
-        except (OSError, ValueError):
+        except (OSError, ValueError, TimeoutError, RecursionError):
             send(
                 {
                     "id": ident,
@@ -61,14 +107,19 @@ async def main(path):
         finally:
             if writer:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), 2)
+                except (OSError, TimeoutError):
+                    pass
             pending.pop(ident, None)
 
     try:
-        while line := await reader.readline():
+        while line := await readline():
+            if len(line) > LIMIT or not line.endswith(b"\n"):
+                raise ValueError("MCP frame exceeds budget")
             try:
                 request = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 send({"id": None, "error": {"code": -32700, "message": "Parse error"}})
                 continue
             if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
@@ -76,7 +127,8 @@ async def main(path):
             ident = request.get("id")
             if ident is None:
                 if request.get("method") == "notifications/cancelled":
-                    target = (request.get("params") or {}).get("requestId")
+                    params = request.get("params")
+                    target = params.get("requestId") if isinstance(params, dict) else None
                     if type(target) in (str, int) and target in pending:
                         pending[target].cancel()
                 continue  # initialized / roots/list_changed
@@ -96,7 +148,9 @@ async def main(path):
             seen.add(ident)
             pending[ident] = asyncio.create_task(handle(request))
     finally:
-        transport.close()
+        stopped.set()
+        if transport is not None:
+            transport.close()
         tasks = list(pending.values())
         for task in tasks:
             task.cancel()
@@ -106,5 +160,5 @@ async def main(path):
 if __name__ == "__main__":
     try:
         asyncio.run(main(sys.argv[1]))
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError, RecursionError):
         raise SystemExit(2) from None
