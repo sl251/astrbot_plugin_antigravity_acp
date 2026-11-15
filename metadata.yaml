@@ -2,7 +2,7 @@ name: astrbot_plugin_antigravity_acp
 display_name: Antigravity ACP
 short_desc: 免反代：官方 AGY CLI 直连，把 Gemini 用作 AstrBot 主模型
 desc: 免反代、免 API Key：通过官方 AGY CLI（ACP）接入 Gemini，支持思考、工具与图片输入（需自备 CLI）。
-version: 0.5.2
+version: 0.5.3
 author: sl251
 repo: https://github.com/sl251/astrbot_plugin_antigravity_acp
 astrbot_version: ">=4.29.4,<4.30"
