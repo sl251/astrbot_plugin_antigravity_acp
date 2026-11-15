@@ -130,7 +130,21 @@ class WindowsPathTests(unittest.IsolatedAsyncioTestCase):
         root = self.root_for_agent_length(600)
         client = SimpleNamespace(
             start=AsyncMock(),
-            new_session=AsyncMock(return_value={}),
+            # probe() treats an empty catalog as NO_MODELS and stays blocked, so
+            # the stub must advertise at least one Gemini entry.
+            new_session=AsyncMock(
+                return_value={
+                    "models": {
+                        "currentModelId": "gemini-4-hydrogen-high",
+                        "availableModels": [
+                            {
+                                "modelId": "gemini-4-hydrogen-high",
+                                "name": "Gemini 4 Hydrogen (High)",
+                            }
+                        ],
+                    }
+                }
+            ),
             close=AsyncMock(),
             capabilities={},
         )
