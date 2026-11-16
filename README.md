@@ -112,6 +112,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
   管理员可执行 `/agy doctor` 进行无生成连通自检，或执行 `/agy cost` 查看各实例只读缓存复用、Token 统计与进程池摘要（不发送任何模型请求）。
 - **关于连通测试与额度**：
   插件「首次设置」里的检测、登录、拉取模型列表均不消耗对话额度。但 AstrBot 模型页自带的“连通测试”会实际发送一条测试消息，消耗少量额度；另外，模型保存成功仅代表协议握手通过，实际能否对话仍取决于账号自身是否有剩余额度。
+- **本机能力与 429 规避**：0.6.1 会过滤 AstrBot 4.29.4 已知的失实本地工具声明；若开启「使用电脑能力 → 本机环境」后仍出现 429，可暂改「不允许任何环境」，该现象的上游根因仍待确认。
 
 ---
 
@@ -145,13 +146,13 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 ## 1. System Identity & Core Invariants (核心契约与安全边界)
 
-- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.0`)
+- **Plugin ID / Repo**: `astrbot_plugin_antigravity_acp` (`v0.6.1`)
 - **Registered Provider Type**: `agy_acp` (Native AstrBot Chat Provider)
 - **Runtime Requirements**: AstrBot `>= 4.29.4, < 4.30` (Verified on `4.29.4`), Python `3.11+`, Zero third-party pip dependencies.
 - **Compliance & Security Invariants (DO NOT VIOLATE)**:
   1. **No Token Extraction**: Never read, parse, export, or forward OAuth tokens from `agy` or OS keyrings (Linux Keyring / macOS Keychain / Windows Credential Manager). Auth lifecycle belongs strictly to the official `agy` binary.
   2. **No Reverse Proxy / Spoofing**: All model traffic must flow through the official `agy acp` subprocess over `stdio`. Do not implement HTTP interception, client fingerprint spoofing, account pooling, or jailbreak prompt injection.
-  3. **Strict Capability Sandboxing**: Every `agy acp` subprocess MUST run with isolated `--gemini-dir`, `--app-data-dir`, and restricted `--agent` config under `data/plugin_data/astrbot_plugin_antigravity_acp/`. Built-in `agy` file/terminal tools are strictly disabled; any ACP request for local FS, terminal, or elevated permissions must be rejected immediately.
+  3. **Strict Capability Sandboxing**: Every `agy acp` subprocess MUST run with isolated `--gemini-dir` and `--app-data-dir` under `data/plugin_data/astrbot_plugin_antigravity_acp/`. Chat uses the restricted `--agent`; tools mode uses the default agent with workspace guardrails and fail-closed permissions. Built-in `agy` file/terminal/web search/browser tools remain denied. Only scoped MCP transit permissions described below may be granted.
 
 ## 2. Architecture & Data Flow (数据流与会话管理)
 
@@ -172,6 +173,34 @@ flowchart LR
 - **Host Tool Bridge (`mcp_bridge.py`)**: POSIX uses a private mode-0600 Unix socket. Windows uses an ephemeral port bound only to `127.0.0.1`, a per-session 256-bit secret in the MCP child environment, and mutual challenge authentication. No remote listener or model HTTP proxy is added. Host approval/execution, schema checks, budgets and session isolation remain in force; idle/terminated turns reject tool calls. Offline Windows relay/tool-turn validation passes; production full-host validation (Linux, ACP loop incl. live 429 fast-fail and fallback) is done — see docs/pr9-acceptance.md. The Windows bridge and minimal-mode A/B remain offline-verified only.
 - **Process Pool & Cleanup**: Sessions remain serialized and bounded. Linux/macOS retain separate process groups. Windows attaches a kill-on-close Job Object immediately after spawn and falls back to `taskkill /T` when unavailable. Attachment is not atomic with spawn; POSIX does not add `preexec_fn`/parent-death hooks, so host SIGKILL and unbound Windows descendants remain limitations.
 - **No Replay After Output**: Partial text/thoughts or handed-off tools cause a terminal `no_retry` + `no_fallback` failure. The existing AstrBot 4.29.4 compatibility layer also intercepts later fallback candidates before they call another provider; simply adding an exception attribute would not stop this host version. Pre-output cooldown/deduplication still permits host fallback. Other runners must honor these attributes, and missing compatibility methods produce a warning. Contract tests include the official 4.29.4 fallback method; production full-host validation is done (see docs/pr9-acceptance.md). A post-429-burst fallback-stickiness observation is tracked in #10.
+
+### 0.6.1 权限分层与失败归因（#11–#14）
+
+ACP permission 只决定能否进入 MCP 桥，不等于宿主批准执行。`settings.json` 仍为 `toolPermission=request-review`，不启用 CLI 全局绕过。
+
+| 请求 / 条件 | 决策 |
+|---|---|
+| 进程存活，同一 ACP 会话的活跃、未超时且未结束 prompt；当前快照严格 `mcp_astrbot_<wire_name>`；已观测同一调用 ID、名称一致，通知与请求状态均为 pending / in_progress；本 prompt 未授权过该 ID；options 完整有效、ID 无重复且恰有一个 allow_once | 仅返回 selected + 该 allow_once 的 optionId |
+| 内置 shell / file / web search / browser、未知 MCP、未观测或名称不匹配的调用 | cancelled |
+| 跨会话、空闲、终态、超时、重复授权、完成/失败调用、畸形请求或歧义 options、仅有持久授权选项 | cancelled |
+| 其他 ACP 客户端能力请求（例如 fs / terminal） | JSON-RPC -32601 |
+| 已获 ACP 放行后的 MCP tools/call | 仍校验会话元数据、宿主原始 schema、次数/并发/结果预算，再交宿主审批与执行 |
+
+授权在写回复前登记，避免重复并发请求；收到 prompt 终态帧立即关闭授权窗口。拒绝证据仅记录当前活跃 prompt，最多 128 条，仅含 method、工具名和调用 ID（各字符串字段有界），不保留参数；下一 prompt 清空。不会把跨会话或迟到拒绝算作本轮空回复原因。
+
+| 无正文终态的证据 | 错误分类与行为 |
+|---|---|
+| 明确持续 429 / 上游容量告警 | RATE_LIMIT，沿用 FailureGuard 冷却；明确额度错误仍为 QUOTA，优先于权限归因 |
+| end_turn 且本轮存在权限拒绝 | TOOL_PERMISSION，说明工具被拒后 CLI 无正文结束；不触发 EMPTY 去重或额度冷却 |
+| 无上述证据 | EMPTY，沿用原空回复去重；不能仅凭 usage 的输出 token 推断正文已返回 |
+
+已有正文时，权限拒绝记录不会覆盖正常答案。工具交接本身可以没有正文，但必须有有效调用供宿主执行回填。tools 模式守卫现在点名禁止内置 web search / browser；提示只能减少尝试，不能修复 CLI 在拒绝后直接终止而不回喂模型的行为。已有输出/工具交接后的禁止重放规则继续生效。
+
+`ToolSnapshot.to_host_schema` 保存独立宿主原始契约，wire `inputSchema` 仅供模型使用。Gemini 缺失 array items 时仍保守补 string（未假设其支持空 items）；dispatch 按原始契约校验，宿主回填按已审计调用与参数精确匹配。两份 schema 均纳入快照指纹，避免适配结果相同掩盖宿主契约改变。
+
+`system_prompt.py` 在构建会话前，对 chat / tools 的稳定 system 都执行同一过滤：只匹配以 `Local computer tools are available subject to your role's file and execution permissions.` 开头的 **AstrBot 4.29.4 完整独立行**，覆盖已知 Unix 文案与 Windows PowerShell 两变体。该宿主本地 shell/session 声明不代表 AGY 会话能力；不会以通用正则删除人格，也不修改用户/助手历史、结构化 transient 数据或宿主源对象。过滤后 system 哈希与字节统计同步更新。残缺、内嵌引用或未知变体保持原样，仅记录不含正文的 debug；宿主改文案后需要重新核对规则（明确版本耦合）。#14 的上游 429 根因及真实修复效果仍须实机验证。
+
+本版回归与实机验收记录见 CHANGELOG 0.6.1 段：全量离线回归 222 项（210 通过 / 12 按平台跳过 / 0 失败，Linux 本地与生产容器各一轮），生产 AstrBot 4.29.4 上 `agy_probe` 注册与 webchat 端到端正常；Windows × Python 3.11 / 3.12 由 CI 矩阵覆盖。#10 不在本版范围。
 
 ### 0.6.0 新配置与 CLI 管理
 
