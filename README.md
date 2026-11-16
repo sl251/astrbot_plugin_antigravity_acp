@@ -7,9 +7,9 @@
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-blue)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4-orange)
-![Status](https://img.shields.io/badge/Status-v0.6.0-brightgreen)
+![Status](https://img.shields.io/badge/Status-v0.6.1-brightgreen)
 
-> **当前正式版本 0.6.0（2026-11-15 发布）**。离线四平台回归与生产实机验收（AstrBot 4.29.4 + AGY CLI 1.5.8，含真实 429 限流风暴下的快速中断与 fallback 兜底）已完成，结果与遗留范围见 [PR #9 验收记录](docs/pr9-acceptance.md)；实施范围与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。
+> **当前正式版本 0.6.1（2026-11-16 发布）**。0.6.1 修复 #11–#14（MCP 权限分层、schema 契约分离、权限拒绝归因、能力声明过滤），全量离线回归 222 项（210 通过 / 12 按平台跳过）与生产实机 webchat 验收完成，详见 [CHANGELOG](CHANGELOG.md)。0.6.0 的生产实机验收（AstrBot 4.29.4 + AGY CLI 1.5.8，含真实 429 限流风暴下的快速中断与 fallback 兜底）见 [PR #9 验收记录](docs/pr9-acceptance.md)；实施范围与回滚方式见 [改进计划](docs/liftgate-hardening-plan.md)。
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
