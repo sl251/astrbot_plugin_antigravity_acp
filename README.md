@@ -13,7 +13,7 @@
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
-> **开发中的 WebUI 监控面板**：计划扩展运行概览、上下文占用、Token/缓存趋势、会话复用与故障诊断，见 [开发计划与 TODO](docs/webui-observability-dashboard-plan.md)（仅计划，功能尚未实现）。
+> **工作区新增 WebUI 运行概览（P0，尚未发布）**：在 AstrBot 插件详情 →「首次设置」打开，首屏可查看各实例的会话池、最近 24h 已知 Token/缓存/复用摘要、上下文采样与最近异常。仅面板管理员可读，约 10 秒刷新，页面隐藏时暂停；刷新只读本地内存，不发送 AGY 请求。每实例最多保留 100 轮，重启清空，`cost_log_enabled=false` 也可查看。上下文仅取同模型存活会话的真实 `usage_update`，缺失显示「上游未报告」；用量缺失显示「未知」，不表示 Google 剩余额度。接口失败标记「数据过期」。趋势图、筛选和诊断复制（监控 P1/P2）未实现，真实面板验收待完成，见 [开发计划与契约](docs/webui-observability-dashboard-plan.md)。
 
 ---
 

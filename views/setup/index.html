@@ -24,6 +24,22 @@
 
     <div id="error" class="alert alert-error" role="alert" hidden></div>
 
+    <section class="card monitor" id="monitor" aria-labelledby="monitor-heading">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 id="monitor-heading">运行概览</h2>
+          <span id="monitor-badge" class="badge">正在加载</span>
+        </div>
+        <button id="monitor-refresh" class="btn btn-sm" type="button" disabled>刷新</button>
+      </div>
+      <div class="card-body">
+        <p class="small">只读本地统计，不发送模型请求。最近 24 小时、每实例最多 100 轮，重启后清空；不代表 Google 账户剩余额度。</p>
+        <p id="monitor-message" class="hint-text" role="status">正在读取运行快照…</p>
+        <div id="monitor-instances" class="monitor-instances"></div>
+        <p id="monitor-updated" class="small">尚未取得快照 · 每 10 秒刷新，页面隐藏时暂停</p>
+      </div>
+    </section>
+
     <div class="grid">
       <!-- 01 运行环境 -->
       <section class="card" id="environment-step" aria-labelledby="environment-heading">

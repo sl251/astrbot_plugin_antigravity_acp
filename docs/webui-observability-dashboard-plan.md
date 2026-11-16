@@ -1,6 +1,6 @@
 # WebUI 运行监控与上下文观测面板：开发计划 / TODO
 
-> 状态：待开发（仅设计文档，未修改功能代码）  
+> 状态：P0 代码与最小离线契约测试已实现，真实 AstrBot WebUI 验收待完成；P1/P2 未实现
 > 基线：`main` 的 v0.6.1（2026-11-16）；目标：下一功能版本，版本号由维护者定。  
 > 设计原则：**把已经有的数据可视化；监控必须只读、低开销、零模型请求；不猜测未上报的额度或上下文。**
 
@@ -36,16 +36,16 @@
 ### 2.1 运行概览（第一屏）
 
 - [ ] **运行状态**：插件已加载、最近一次环境检测及其时间、CLI 版本、ACP 状态（“最近检测通过 / 未检测 / 检测失败”），不要用静态 `passed` 误报“实时连接正常”。
-- [ ] **实例卡片**：provider ID、模型 ID、chat/tools/inherit、是否启用、工具总闸实际生效状态、思考档位（有可验证来源才显示）。
-- [ ] **会话池卡片**：活跃会话数/上限、存活进程数、进行中的工具续轮数；按实例展示，不跨实例混算上限。
-- [ ] **最近 24h 摘要**：实际发送轮数、成功/失败、复用率、缓存读取占比、已知输入/输出 Token、未知 usage 轮数。未上报的 Token 显示“未知”，不并入 0。
-- [ ] **最近异常**：只显示安全错误码（`QUOTA` / `RATE_LIMIT` / `EMPTY` / `TOOL_PERMISSION` / `TIMEOUT` 等）及相对时间；不展示消息文本或调用参数。
-- [ ] **刷新状态**与采样时间：可手动刷新；自动刷新仅本地读统计，默认约 10 秒，隐藏页面暂停；不能启动 `agy acp` 请求。
+- [x] **实例卡片**：provider ID、模型 ID、chat/tools/inherit、是否启用、工具总闸实际生效状态、思考档位（有可验证来源才显示）。
+- [x] **会话池卡片**：活跃会话数/上限、存活进程数、进行中的工具续轮数；按实例展示，不跨实例混算上限。
+- [x] **最近 24h 摘要**：实际发送轮数、成功/失败、复用率、缓存读取占比、已知输入/输出 Token、未知 usage 轮数。未上报的 Token 显示“未知”，不并入 0。
+- [x] **最近异常**：只显示安全错误码（`QUOTA` / `RATE_LIMIT` / `EMPTY` / `TOOL_PERMISSION` / `TIMEOUT` 等）及相对时间；不展示消息文本或调用参数。
+- [x] **刷新状态**与采样时间：可手动刷新；自动刷新仅本地读统计，默认约 10 秒，隐藏页面暂停；不能启动 `agy acp` 请求。
 
 ### 2.2 用量与上下文（本次重点）
 
-- [ ] **上下文进度条**：`context_used / context_window_size`，显示已用/总量、百分比、采样时间、模型与实例；分母为 null/0 时显示“上游未报告”，不画 0%。
-- [ ] **每会话数据边界**：只展示有当前有效采样的实例/会话；明确区分最近一次轮次记录和仍在运行的会话。不同模型或重新建 session 后不得沿用旧窗口。
+- [x] **上下文进度条**：`context_used / context_window_size`，显示已用/总量、百分比、采样时间、模型与实例；分母为 null/0 时显示“上游未报告”，不画 0%。
+- [x] **每会话数据边界**：只展示有当前有效采样的实例/会话；明确区分最近一次轮次记录和仍在运行的会话。不同模型或重新建 session 后不得沿用旧窗口。
 - [ ] **压缩提示**：“检测到疑似上下文压缩”+命中时间；解释是启发式判断，不能写“已压缩成功”。
 - [ ] **Token 消耗趋势**：最近 24h 最多 100 轮的 input_other、input_cached、output，区分请求状态、模型、chat/tools；无数据给空态。
 - [ ] **缓存表现**：已报告缓存读取的占比、缓存字段缺失轮次；字段缺失 ≠ 缓存为 0。汇总统计口径与 `/agy cost` 保持一致。
@@ -69,18 +69,18 @@
 
 ## 3. 后端接口与数据契约
 
-建议新增独立**只读** Web API：`GET /astrbot_plugin_antigravity_acp/monitor/status`，前端通过 `bridge.apiGet("monitor/status")` 调用；不要把大量轮次数据直接塞进现有 `setup/status` 的 5 秒向导轮询响应。
+已新增独立**只读** Web API：`GET /astrbot_plugin_antigravity_acp/monitor/status`，前端通过 `bridge.apiGet("monitor/status")` 调用；不要把大量轮次数据直接塞进现有 `setup/status` 的 5 秒向导轮询响应。
 
-- [ ] `onboarding.py` 或新模块 `agy_provider/monitoring.py` 注册并清理监控路由；沿用 `request.username` 校验、AstrBot 管理面板鉴权以及 `Cache-Control: no-store`；权限需做到**仅管理员可见**，如宿主接口无法可靠区分管理员，则阻止开放明细，先验证权限模型。
-- [ ] `provider.py` 增加监控专用聚合入口，从已激活 provider 的 Runtime/Telemetry 取**原子或一致性快照**；不要执行 `probe`、`test`、`session/new`、`set_model` 或其他真实 AGY 请求。
-- [ ] `telemetry.py` 提供 `safe_recent_turns(limit=20)` 之类只返回白名单字段的方法；不向客户端返回原始 `history` 对象、提示词、session_key/native_session_tag、tool schema、执行参数等。
-- [ ] 服务端归一化状态码、数字、采样时间和 `null`；固定响应版本 `schema_version=1`，便于后续扩展。
-- [ ] 按 provider ID 分组。若实例未激活，返回“已配置但运行时未初始化”；不能将该实例与另一实例的统计拼接。
-- [ ] 明确定义采样寿命：内存中的最近 24h / 100 轮按实例保留；无真实 `usage_update` 就 `context_window_size=null`，页面刷新不会改变这个事实。
-- [ ] 限制响应体积/记录数量，轮询只走内存读取；前端请求失败显示上一次快照的“已过期”标识，而非继续显示“运行正常”。
-- [ ] 默认不持久化监控历史；`cost_log_enabled=false` 时仪表盘依然能看**当前内存聚合**，但重启后记录归零。
+- [x] `onboarding.py` 或新模块 `agy_provider/monitoring.py` 注册并清理监控路由；沿用 `request.username` 校验、AstrBot 管理面板鉴权以及 `Cache-Control: no-store`；权限需做到**仅管理员可见**，如宿主接口无法可靠区分管理员，则阻止开放明细，先验证权限模型。
+- [x] `provider.py` 增加监控专用聚合入口，从已激活 provider 的 Runtime/Telemetry 取**原子或一致性快照**；不要执行 `probe`、`test`、`session/new`、`set_model` 或其他真实 AGY 请求。
+- [x] `telemetry.py` 提供 `safe_recent_turns(limit=20)` 之类只返回白名单字段的方法；不向客户端返回原始 `history` 对象、提示词、session_key/native_session_tag、tool schema、执行参数等。
+- [x] 服务端归一化状态码、数字、采样时间和 `null`；固定响应版本 `schema_version=1`，便于后续扩展。
+- [x] 按 provider ID 分组。若实例未激活，返回“已配置但运行时未初始化”；不能将该实例与另一实例的统计拼接。
+- [x] 明确定义采样寿命：内存中的最近 24h / 100 轮按实例保留；无真实 `usage_update` 就 `context_window_size=null`，页面刷新不会改变这个事实。
+- [x] 限制响应体积/记录数量，轮询只走内存读取；前端请求失败显示上一次快照的“已过期”标识，而非继续显示“运行正常”。
+- [x] 默认不持久化监控历史；`cost_log_enabled=false` 时仪表盘依然能看**当前内存聚合**，但重启后记录归零。
 
-建议响应轮廓（字段名可调整，开发时固定契约并写测试）：
+schema_version=1 响应轮廓（附加字段定义见下方，契约固定在 `tests/test_monitoring.py`）：
 
 ```json
 {
@@ -118,16 +118,28 @@
 
 上述数值仅作契约示例，**不是任何用户账号的实测记录**。
 
+
+### P0 已落定契约与权限证据
+
+- 路由返回顶层 `schema_version / sampled_at / window / instances`。`sampled_at` 为 UTC ISO-8601 读取时间；24h / 100 轮以内的内存统计与 `cost_log_enabled` 独立，时间窗口仍用单调时钟裁剪。
+- 每实例另含 `enabled / tools_mode / tools_enabled / runtime_state`；模式依据当前激活实例配置与插件工具总闸求有效值；重载等待期间不把新保存的模式套在旧实例统计上，`enabled` 仍表示配置开关。`runtime_state=configured` 表示「已配置未初始化」，此时 `pool`、`summary` 为 null，`recent_turns=[]`；只读取 ProviderManager 当前 `inst_map` 实例，不读取临时模型目录 provider、不初始化实例。
+- `summary` 固定字段为 `total_turns / request_sent_turns / success_turns / failed_turns / reuse_rate / cache_token_ratio / unavailable_usage_turns / reported_usage_turns / missing_cache_field_turns / total_input_other / total_input_cached / total_output / rebuild_reasons`。成功为 `status=ok`，失败包括 error/cancelled/short_circuited；发送轮数单列。复用与缓存分母沿用 `/agy cost`，已知 Token 单独汇总；全部 usage 未知时 Token 为 null，全部缓存字段缺失时 cached 总量为 null。部分缺失在 UI 提示，不把未知消耗当零。
+- `latest_context` 另含 `source=acp_usage_update|not_reported / scope=latest_live_session / model`。只从当前实例同模型的存活会话中选最近真实采样，表示一个会话的最后观测，**并非所有会话汇总或实时探测**。无采样、会话退出/重建、模型变化或无效 usage_update 后，`context_used/context_window_size/observed_at` 为 null；读取不会刷新 `observed_at`。上游 `current_model_update/config_option_update` 后，即使再次上报 usage，也保守视为模型归属未知，不展示该会话窗口，直到重建新会话；不改变原有压缩检测与回收策略。历史 turn 的上下文只在 `recent_turns` 中表示当时的样本，不回填当前窗口。
+- `recent_turns` 最新在前，硬上限 20，每轮仅有 `recorded_at / model / mode / status / error_code / elapsed_ms / input_other / input_cached / output / usage_status / cache_fields_present / context_used / context_window_size / observed_at / reused / rebuild_reasons / prompt_bytes / replay_bytes / omitted_messages / content_429_candidate`。嵌套对象同样白名单过滤；candidate 为 null 或 `{system_hash8, system_bytes, has_output, attempt}`，attempt 归一为整数或 null。仅属 CLI 摘要候选特征，不表示已确认的内容拦截。未知错误码归一为 UPSTREAM，重建原因只允许固定枚举。
+- 快照函数不 await、不做 I/O；Provider、Runtime 和 Telemetry 均由同一事件循环维护，因此不会在字段读取之间让其他协程修改状态；同一实例的摘要与最近记录共享同一个 24h 裁剪时刻。失败返回通用错误，不返回原始异常文本。
+- **权限已按宿主源码核实，离线测试模拟该形态**：AstrBot 4.29.4 的 [AuthService.login](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/dashboard/services/auth_service.py#L284) 仅接受 `dashboard.username` 配置账户；[插件路由](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/dashboard/api/plugins.py#L399) 的 v1 API 也可接收 plugin scope API Key，其 [身份形式](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/dashboard/api/auth.py#L132) 为 `api_key:<id>`。监控先要求 `request.username`，再明确拒绝 API Key 并严格匹配 `provider_manager.acm.default_conf["dashboard"]["username"]`；配置不可识别则拒绝。4.30.0-alpha.1 的 [鉴权源码](https://github.com/AstrBotDevs/AstrBot/blob/739840886c5fbbd439f477ac4b6e8eb7ba3e0649/astrbot/dashboard/api/auth.py) 相同。此处管理员指面板账户，非聊天平台 `admins_id`。真实宿主 HTTP/桥接验收仍在 §6 待办中。
+- 本期只增加接口契约、权限、路由生命周期三条监控测试；实例隔离、采样失效、未知 usage 与 TTL 断言合并在契约测试中。没有扩写趋势图、筛选或隐私边界矩阵。
+
 ## 4. 分阶段 TODO（建议按顺序实施）
 
 ### P0：数据可信 + MVP（第一批交付）
 
-- [ ] P0-1 后端新增只读监控聚合接口、管理员鉴权、白名单过滤、响应大小限制。
-- [ ] P0-2 提供有效上下文样本的 `used/size/observed_at` 语义；修正“历史最后一轮数据”被误当成“当前活跃上下文”的情况。
-- [ ] P0-3 接入实例、模型、模式、会话池、24h Token、usage 缺失、复用率、重建原因。
-- [ ] P0-4 WebUI 首屏总览 + 上下文占用进度条 + 最近故障/复用状态 + 刷新时间。
-- [ ] P0-5 加载/空态/无权限/过期数据/上游未报告状态，保持登录与模型配置功能可用。
-- [ ] P0-6 为接口契约、权限、采样清理、未知 usage、实例隔离增加自动化测试。
+- [x] P0-1 后端新增只读监控聚合接口、管理员鉴权、白名单过滤、响应大小限制。
+- [x] P0-2 提供有效上下文样本的 `used/size/observed_at` 语义；修正“历史最后一轮数据”被误当成“当前活跃上下文”的情况。
+- [x] P0-3 接入实例、模型、模式、会话池、24h Token、usage 缺失、复用率、重建原因。
+- [x] P0-4 WebUI 首屏总览 + 上下文占用进度条 + 最近故障/复用状态 + 刷新时间。
+- [x] P0-5 加载/空态/无权限/过期数据/上游未报告状态，保持登录与模型配置功能可用。
+- [x] P0-6 为接口契约、权限、采样清理、未知 usage、实例隔离增加自动化测试。
 
 ### P1：历史分析 + 故障定位（第二批）
 
@@ -176,6 +188,6 @@
 
 ## 8. 完成定义
 
-**P0 完成**即可让用户在现有 WebUI 一眼看到“哪个实例在运行、最近是否报错、用了多少已知 Token、复用是否正常、上游有没有报告上下文窗口”；**P1 完成**后才算具备排查“为什么 21 小时烧完周额度”的完整可观测能力。P2 属于产品打磨，不阻塞 P0/P1 上线。
+**P0 代码已实现，实机验收待完成**；验收完成后即可让用户在现有 WebUI 一眼看到“哪个实例在运行、最近是否报错、用了多少已知 Token、复用是否正常、上游有没有报告上下文窗口”；**P1 完成**后才算具备排查“为什么 21 小时烧完周额度”的完整可观测能力。P2 属于产品打磨，不阻塞 P0/P1 上线。
 
-> 实施时每个 P 阶段单独 PR、测试和验收，先交付 P0 再逐步扩展；这份文档只是 TODO，不代表功能已开发。
+> 实施时每个 P 阶段单独 PR、测试和验收，先交付 P0 再逐步扩展；本页仅勾选已交付代码/离线验证，未勾选的实机验收与 P1/P2 不代表已完成。

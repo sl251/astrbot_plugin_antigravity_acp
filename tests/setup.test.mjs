@@ -44,7 +44,8 @@ async function boot(initial = base()) {
     document: {documentElement: new Element("html"), getElementById: id => {
       assert.ok(elements.has(id), `Missing element ${id}`);
       return elements.get(id);
-    }, createElement: tag => new Element(tag)},
+    }, createElement: tag => new Element(tag), hidden: false,
+    addEventListener: (name, cb) => {handlers[name] = cb;}},
     Option: class {constructor(name, value) {this.text = name; this.value = value;}},
     navigator: {clipboard: {writeText: async () => {throw new Error("iframe clipboard unavailable");}}},
     setTimeout: () => 1, clearTimeout: () => {},

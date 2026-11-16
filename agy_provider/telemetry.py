@@ -6,12 +6,14 @@ import hashlib
 import hmac
 import json
 import secrets
+import re
 import statistics
 import time
 import uuid
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from astrbot.api import logger
 
@@ -50,6 +52,42 @@ _VALID_HISTORY_RELATIONS = {
     "append_gap",
     "unknown",
 }
+
+# Closed vocabulary: unknown errors/reasons must never become free-form text.
+MONITOR_ERROR_CODES = frozenset("""
+AUTH AUTH_BRIDGE BACKPRESSURE BUSY CANCELLED CLOSED CONFIG EMPTY IMAGE_CAPABILITY
+INPUT INPUT_LIMIT LAUNCH LOGIN_EXPIRED LOGIN_URL MODEL NOT_INSTALLED NO_MODELS
+OUTPUT_LIMIT PERMISSION PROTOCOL RATE_LIMIT QUOTA STARTUP_EXIT STOP TIMEOUT
+TOOLS_DISABLED TOOL_ARGUMENTS TOOL_BUDGET TOOL_CANCELLED TOOL_CHOICE
+TOOL_CONCURRENCY TOOL_CONTEXT TOOL_DUPLICATE TOOL_HISTORY TOOL_ID TOOL_PERMISSION
+TOOL_PROTOCOL TOOL_RESULT TOOL_RESULT_LIMIT TOOL_SCHEMA TOOL_SESSION TOOL_STALE
+TOOL_TERMINATED TOOL_TIMEOUT TOOL_UNKNOWN TRANSPORT UNSUPPORTED UPSTREAM
+CLI_WRAPPER COMMAND_NOT_FOUND PROXY_AUTH PROXY NETWORK TLS
+""".split())
+
+
+def safe_label(value: object) -> str:
+    return value[:256] if isinstance(value, str) else ""
+
+
+def safe_timestamp(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed.astimezone(timezone.utc).isoformat() if parsed.tzinfo else None
+    except ValueError:
+        return None
+
+
+def safe_context(source: dict) -> dict:
+    used = _valid_nonneg_int(source.get("context_used"))
+    size = _valid_nonneg_int(source.get("context_window_size"))
+    observed_at = safe_timestamp(source.get("observed_at"))
+    if (source.get("context_model_known") is False or used is None or size is None
+            or not 0 < used <= size <= 2**53 - 1 or observed_at is None):
+        used = size = observed_at = None
+    return {"context_used": used, "context_window_size": size, "observed_at": observed_at}
 
 
 def pick_primary_reason(reasons: list[str]) -> str | None:
@@ -375,6 +413,7 @@ class TelemetryTracker:
 
     def record_turn(self, record: dict) -> None:
         self._prune_history()
+        record["recorded_at"] = datetime.now(timezone.utc).isoformat()
         self.history.append(record)
         self._history_times.append(self.clock())
         if self.cost_log_enabled:
@@ -383,8 +422,62 @@ class TelemetryTracker:
             self._emitted_times.append(self.clock())
             _emit_json_line(line)
 
-    def _prune_history(self) -> None:
-        cutoff = self.clock() - HISTORY_TTL_SECONDS
+    def safe_recent_turns(self, limit: int = 20, *, now: float | None = None) -> list[dict]:
+        """Newest first; fresh, bounded, recursive allowlist, never raw history."""
+        self._prune_history(now)
+        limit = min(20, max(0, limit)) if type(limit) is int else 20
+        rows = []
+        for record in list(reversed(self.history))[:limit]:
+            row = {
+                "recorded_at": safe_timestamp(record.get("recorded_at")),
+                "model": safe_label(record.get("model")),
+                "mode": record.get("mode") if record.get("mode") in {"chat", "tools"} else "unknown",
+                "status": record.get("status") if record.get("status") in {"ok", "error", "cancelled", "short_circuited"} else "unknown",
+                "error_code": (record.get("error_code") if record.get("error_code") in MONITOR_ERROR_CODES
+                               else "UPSTREAM" if record.get("error_code") else None),
+                "usage_status": record.get("usage_status") if record.get("usage_status") in {"reported", "unavailable", "not_sent"} else "unavailable",
+                "reused": record.get("reused") is True,
+                "rebuild_reasons": [r for r in REBUILD_REASON_PRIORITY if r in record.get("rebuild_reasons", [])],
+                "cache_fields_present": {
+                    key: record.get("cache_fields_present", {}).get(key) is True
+                    for key in ("cachedReadTokens", "cachedWriteTokens")
+                },
+                **safe_context(record),
+            }
+            for key in ("elapsed_ms", "input_other", "input_cached", "output", "prompt_bytes", "replay_bytes", "omitted_messages"):
+                row[key] = _valid_nonneg_int(record.get(key))
+            candidate = record.get("content_429_candidate")
+            row["content_429_candidate"] = None
+            if isinstance(candidate, dict):
+                hash8 = candidate.get("system_hash8")
+                attempt = candidate.get("attempt")
+                row["content_429_candidate"] = {
+                    "system_hash8": hash8 if isinstance(hash8, str) and re.fullmatch(r"[0-9a-f]{8}", hash8) else None,
+                    "system_bytes": _valid_nonneg_int(candidate.get("system_bytes")),
+                    "has_output": candidate.get("has_output") is True,
+                    "attempt": int(attempt) if isinstance(attempt, (str, int)) and re.fullmatch(r"[0-9]{1,9}", str(attempt)) else None,
+                }
+            rows.append(row)
+        return rows
+
+    def monitor_summary(self, *, now: float | None = None) -> dict:
+        """Use /agy cost denominators, preserving unknown token buckets as null."""
+        stats = self.summarize(now=now)
+        keys = ("total_turns", "request_sent_turns", "reuse_rate", "cache_token_ratio",
+                "unavailable_usage_turns", "reported_usage_turns", "missing_cache_field_turns",
+                "total_input_other", "total_input_cached", "total_output")
+        result = {key: stats[key] for key in keys}
+        result["success_turns"] = sum(t["status"] == "ok" for t in self.history)
+        result["failed_turns"] = stats["total_turns"] - result["success_turns"]
+        result["rebuild_reasons"] = [[r, n] for r, n in stats["rebuild_reasons"] if r in REBUILD_REASON_PRIORITY]
+        if not stats["reported_usage_turns"]:
+            result["total_input_other"] = result["total_output"] = None
+        if stats["reported_usage_turns"] == stats["missing_cache_field_turns"]:
+            result["total_input_cached"] = None
+        return result
+
+    def _prune_history(self, now: float | None = None) -> None:
+        cutoff = (self.clock() if now is None else now) - HISTORY_TTL_SECONDS
         for times, records in ((self._history_times, self.history),
                                (self._emitted_times, self.emitted_lines)):
             while times and times[0] <= cutoff:
@@ -434,8 +527,8 @@ class TelemetryTracker:
             return None
         return item.reason
 
-    def summarize(self) -> dict:
-        self._prune_history()
+    def summarize(self, *, now: float | None = None) -> dict:
+        self._prune_history(now)
         turns = list(self.history)
         total = len(turns)
         sent_turns = [t for t in turns if t["request_sent"]]

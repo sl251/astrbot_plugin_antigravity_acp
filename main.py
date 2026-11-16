@@ -13,6 +13,7 @@ from .agy_provider.config import Settings
 from .agy_provider.errors import AgyError
 from .agy_provider.host_compat import install_host_compat, uninstall_host_compat
 from .agy_provider.onboarding import Onboarding, ensure_provider_source, next_step
+from .agy_provider.monitoring import Monitoring
 from .agy_provider.provider import (
     DEFAULT_CONFIG,
     OWNER,
@@ -55,6 +56,7 @@ class AgyProviderPlugin(Star):
         self.doctor_task = None
         self.stopping = False
         self.setup_service = None
+        self.monitor_service = None
 
     @filter.command_group("agy")
     async def agy(self, event: AstrMessageEvent):
@@ -227,11 +229,15 @@ class AgyProviderPlugin(Star):
         self.stopping = False
         self.setup_service = Onboarding(self.context, settings)
         self.setup_service.register()
+        self.monitor_service = Monitoring(self.context)
+        self.monitor_service.register()
         if settings.setup_auto_check:
             self.setup_service.start_check()
 
     async def terminate(self):
         self.stopping = True
+        if self.monitor_service:
+            await self.monitor_service.close()
         if self.setup_service:
             await self.setup_service.close()
         if self.doctor_task:

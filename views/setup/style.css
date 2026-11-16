@@ -181,6 +181,108 @@ h2 {
   flex: 1;
 }
 
+/* Read-only monitoring overview shares the setup card theme. */
+.monitor {
+  margin-bottom: 16px;
+}
+
+.monitor > .card-head,
+.monitor-instance-head {
+  flex-wrap: wrap;
+}
+
+.monitor-instances {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+}
+
+.monitor-instance {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.monitor-instance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.monitor-instance h3,
+.monitor-instance h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.monitor-model {
+  margin: 7px 0 3px;
+  font-size: 13px;
+}
+
+.monitor-empty {
+  margin: 18px 0 4px;
+  color: var(--muted);
+}
+
+.monitor-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 12px;
+}
+
+.monitor-metric dd {
+  margin: 3px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-context,
+.monitor-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.monitor-progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--ready-dot);
+}
+
+.monitor-faults {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.monitor-faults li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.monitor-faults code {
+  color: var(--error);
+}
+
+.monitor[data-stale="true"] .monitor-instances {
+  opacity: 0.6;
+}
+
 /* Badges */
 .badge {
   display: inline-flex;

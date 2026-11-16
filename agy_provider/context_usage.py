@@ -1,6 +1,7 @@
 """Session occupancy observations, deliberately separate from billable usage."""
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -12,6 +13,10 @@ class ContextUsage:
     peak: int | None = None
     suspected_compaction: bool = False
     _comparable: bool = False
+    observed_at: str | None = None
+    # Monitoring cannot attribute later samples to the selected model after an
+    # unsolicited upstream model/config change. Restored by a new ACP session.
+    model_known: bool = True
 
     def observe(self, update: dict) -> None:
         # Only ACP v1 usage_update.used/size has this meaning. inputTokens and
@@ -23,6 +28,7 @@ class ContextUsage:
         ):
             self._comparable = False
             self.used = self.size = self.peak = None
+            self.observed_at = None
             return
         if self._comparable and size == self.size:
             if (
@@ -36,12 +42,15 @@ class ContextUsage:
             # comparison chain; no cross-model/cross-session inference.
             self.peak = used
         self.used, self.size = used, size
+        self.observed_at = datetime.now(timezone.utc).isoformat()
         self._comparable = True
 
     def summary(self) -> dict:
         return {
             "context_used": self.used,
             "context_window_size": self.size,
+            "observed_at": self.observed_at,
+            "context_model_known": self.model_known,
             "peak_context_used": self.peak,
             "upstream_compaction_detected": self.suspected_compaction,
         }

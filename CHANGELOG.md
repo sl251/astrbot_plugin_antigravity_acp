@@ -1,5 +1,11 @@
 # 变更记录
 
+## 未发布
+
+- WebUI 监控 P0：新增管理员只读 `monitor/status`（schema_version=1），限制最近 20 轮并递归投影安全字段；拒绝 API Key 身份，响应 `Cache-Control: no-store`，停用清理路由。读取当前已激活实例的内存快照，不启动 CLI、探测或模型请求。
+- 首次设置页新增运行概览：按实例展示会话池、24h 已知 Token/缓存/复用、usage 缺失、最近异常与有效上下文；10 秒刷新、隐藏暂停，失败显示数据过期。真实上游采样时间与页面刷新时间分开，无样本为 null；关闭或换模型的会话不提供旧上下文。原 01–04 向导保留。监控 P1/P2 尚未实现，真实面板验收待完成。
+- 429 候选遥测补充 Provider→fake_cli→`agy.turn` 端到端测试，覆盖单行 detail-free、QUOTA、RetryInfo 和先正文后失败，strong-rate 回归保留。字面多行 detail-free 通知当前仍会超时而非 fast-fail，记录为预期失败；本次未改 `notices.py`、FailureGuard 或 system 过滤逻辑。
+
 ## 0.6.1（正式发布，2026-11-16）
 
 - **#11 内置工具拒绝后空回复归因**：本轮权限拒绝改为有界结构化记录（method、工具名、调用 ID），排除跨会话、过期及上轮记录；`end_turn` 无正文且有拒绝证据时返回 `TOOL_PERMISSION`，保留上游限流分类优先级，不进入 EMPTY 去重或额度冷却。守卫提示明确禁止内置 web search / browser；这是提示与诊断缓解，不能修复 CLI 未回喂拒绝结果的问题。

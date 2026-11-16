@@ -135,6 +135,35 @@ for line in sys.stdin:
             block_types=[b.get("type") for b in blocks if isinstance(b, dict)],
         )
         cur = active_scenario()
+        if cur in {
+            "content-429", "content-429-quota", "content-429-retry-info",
+            "content-429-after-text", "content-429-multiline",
+        }:
+            def text_update(text):
+                send({"method": "session/update", "params": {
+                    "sessionId": "fake-session", "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": text},
+                    }}})
+
+            if cur == "content-429-after-text":
+                text_update("partial answer\n")
+                time.sleep(0.05)
+            diagnostic = "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota)."
+            if cur == "content-429-quota":
+                diagnostic = "RESOURCE_EXHAUSTED: Daily quota exceeded"
+            elif cur == "content-429-retry-info":
+                diagnostic += ' RetryInfo {"retryDelay":"30s"}'
+            elif cur == "content-429-multiline":
+                diagnostic = diagnostic.replace(": Resource", "\nResource")
+            text_update(f"⚠ API error (attempt 1): {diagnostic}\n")
+            # Attempt 2 arrives character by character: existing strong-rate
+            # fast-fail may fire before this notice's trailing detail arrives.
+            for char in f"⚠ API error (attempt 2): {diagnostic}\n":
+                text_update(char)
+            # No terminal response: failures must abort rather than succeed on
+            # a fixture-generated RPC error. The multiline gap hits timeout.
+            continue
         if cur in {"context-drop", "context-grow", "strong-quota", "strong-auth", "strong-rate", "partial-fatal"}:
             def update(value):
                 send({"method": "session/update", "params": {

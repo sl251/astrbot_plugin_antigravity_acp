@@ -19,7 +19,7 @@ from .messages import digest, normalize
 from .paths import plugin_data_root
 from .sessions import Runtime
 from .system_prompt import filter_host_capabilities
-from .telemetry import TurnMeter
+from .telemetry import TurnMeter, safe_context, safe_label
 from .tool_turn import chat_events
 from .tools import ToolSnapshot
 
@@ -94,6 +94,61 @@ def instance_cost_snapshots() -> list[dict]:
                 "pool": inst.runtime.pool_stats(),
             }
         )
+    return rows
+
+
+def instance_monitor_snapshots(manager) -> list[dict]:
+    """Synchronous snapshot on AstrBot's event loop: no await, I/O or AGY calls.
+
+    Only the manager's current instance counts. WeakSet also contains temporary
+    model-list providers and replaced instances, so it is unsuitable here.
+    """
+    rows = []
+    for config in list(manager.providers_config):
+        merged = manager.get_merged_provider_config(config)
+        if merged.get("type") != PROVIDER_TYPE:
+            continue
+        provider_id = config.get("id")
+        inst = manager.inst_map.get(provider_id)
+        active = (isinstance(inst, AgyProvider) and not inst.runtime.stopped
+                  and inst.provider_id == provider_id)
+        settings = inst.settings if active else _settings
+        running_config = inst.provider_config if active else merged
+        tools_mode = (running_config.get("custom_extra_body") or {}).get("agy_tools_mode", "inherit")
+        if tools_mode not in {"inherit", "chat", "tools"}:
+            tools_mode = "invalid"
+        effective_tools = settings.enable_tools and tools_mode in {"inherit", "tools"}
+        model = safe_label(inst.get_model() if active else
+                           merged.get("model") or (merged.get("model_config") or {}).get("model", ""))
+        latest_context = {
+            **safe_context({}), "source": "not_reported",
+            "scope": "latest_live_session", "model": model,
+        }
+        if active:
+            # Historical turn records are not a live context. Closed/dead,
+            # replaced and different-model sessions cannot supply this sample.
+            samples = []
+            for session in inst.runtime.sessions.values():
+                if session.model != model or session.client is None or not session.client.alive:
+                    continue
+                sample = safe_context(session.client.context_usage.summary())
+                if sample["observed_at"] is not None:
+                    samples.append(sample)
+            if samples:
+                latest_context.update(max(samples, key=lambda s: s["observed_at"]))
+                latest_context["source"] = "acp_usage_update"
+        history_now = inst.runtime.telemetry.clock() if active else None
+        rows.append({
+            "provider_id": safe_label(provider_id), "model": model,
+            "enabled": bool(merged.get("enable")),
+            "tools_mode": tools_mode, "effective_mode": "tools" if effective_tools else "chat",
+            "tools_enabled": bool(effective_tools),
+            "runtime_state": "active" if active else "configured",
+            "pool": inst.runtime.pool_stats() if active else None,
+            "summary": inst.runtime.telemetry.monitor_summary(now=history_now) if active else None,
+            "latest_context": latest_context,
+            "recent_turns": inst.runtime.telemetry.safe_recent_turns(20, now=history_now) if active else [],
+        })
     return rows
 
 

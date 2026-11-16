@@ -528,6 +528,7 @@ class AcpClient:
             return
         if kind in {"current_model_update", "config_option_update"}:
             self.context_usage.observe({})
+            self.context_usage.model_known = False
             return
         if kind in {"error", "agent_error", "session_error", "agent_execution_error"}:
             raise remote_error(update.get("error", update))
