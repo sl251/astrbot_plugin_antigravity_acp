@@ -446,6 +446,7 @@ class AgyProvider(Provider):
                     model=selected,
                     effort=effort,
                     system_bytes=request.system_bytes,
+                    system_hash8=(request.system_hash or "")[:8],
                     transient_bytes=len((request.transient_data or "").encode()),
                     tool_schema_bytes=snapshot.schema_bytes,
                 )

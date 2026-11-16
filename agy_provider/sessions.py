@@ -477,6 +477,7 @@ class Runtime:
 
         async with self.lease(key or uuid.uuid4().hex, temporary) as session:
             completed = False
+            output_seen = False
             failure_exc: BaseException | None = None
             cancelled = False
             generation_started = False
@@ -606,8 +607,12 @@ class Runtime:
                             continue
                         if event.kind == "tools":
                             local_meter.record_tool_call()
+                        if event.kind == "thought":
+                            output_seen = True
                         if event.kind == "text":
                             text_parts.append(event.text)
+                            if event.text.strip():
+                                output_seen = True
                         if event.kind == "done":
                             result = event.result or {}
                             local_meter.observe_usage(result, source="acp_terminal")
@@ -747,6 +752,9 @@ class Runtime:
                         )
                     else:
                         self.failure_guard.release_probe(claimed_half_open)
+                    local_meter.observe_output(
+                        has_output=output_seen or local_meter.tool_calls > 0
+                    )
                     local_meter.finish(
                         status="cancelled" if cancelled else "error",
                         error_code=error_code,

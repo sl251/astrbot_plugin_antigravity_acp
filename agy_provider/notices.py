@@ -15,6 +15,28 @@ class UpstreamState(str, Enum):
     AGENT_FATAL = "AGENT_FATAL"
 
 
+# Heuristic marker for content-triggered 429 investigation (docs/429 doc P1):
+# a generic RESOURCE_EXHAUSTED wording without structured quota details.
+# This classifies the CLI *summary* text, not the raw HTTP body; truncation at
+# max_diagnostic_bytes may drop trailing structured fields (known limitation).
+_DETAIL_FREE_PATTERN = re.compile(
+    r"resource has been exhausted \(e\.g\. check quota\)", re.IGNORECASE
+)
+_STRUCTURED_DETAIL_PATTERN = re.compile(
+    r"retryinfo|quotafailure|errorinfo|retrydelay|details[\"'\\s]*[:=\\[]",
+    re.IGNORECASE,
+)
+
+
+def detail_free_exhausted(text: str) -> bool:
+    """True when the notice looks like a detail-free capacity exhaustion."""
+    if not text:
+        return False
+    if _STRUCTURED_DETAIL_PATTERN.search(text):
+        return False
+    return bool(_DETAIL_FREE_PATTERN.search(text))
+
+
 def classify_notice(text: str) -> UpstreamState:
     """Only call on bounded CLI diagnostic envelopes, never answer prose."""
     text = text.lower()
@@ -76,6 +98,14 @@ class RetryNoticeGuard:
         self._rate_counted = False
         self._attempt = ""
         self._last_rate_attempt = None
+        # Content-429 candidate observability (docs/429 doc P1): sticky across
+        # notices within one turn, recalculated as diagnostic text grows.
+        self.detail_free = False
+        self.detail_free_seen = False
+
+    @property
+    def attempt_number(self) -> str | None:
+        return self._attempt or None
 
     def _possible(self, text):
         for head in self.heads:
@@ -109,6 +139,12 @@ class RetryNoticeGuard:
                 self._notice_diagnostic, retry_notice=True
             ).code
             self.state = classify_notice(self._notice_diagnostic)
+            self.detail_free = (
+                self.state == UpstreamState.RATE_LIMIT_OR_CAPACITY
+                and detail_free_exhausted(self._notice_diagnostic)
+            )
+            if self.detail_free:
+                self.detail_free_seen = True
             if self.state == UpstreamState.ACCOUNT_QUOTA_EXHAUSTED:
                 self.fast_fail_code = "QUOTA"
             elif self.state == UpstreamState.AUTH_FATAL:
@@ -131,6 +167,7 @@ class RetryNoticeGuard:
     def _start_notice(self, candidate, *, can_continue):
         self._end_continuation()
         self._rate_counted = False
+        self.detail_free = False
         match = re.match(r"^⚠\ufe0f? API error \(attempt ([0-9]+)\):", candidate)
         self._attempt = match[1] if match else ""
         self.diagnostic = ""

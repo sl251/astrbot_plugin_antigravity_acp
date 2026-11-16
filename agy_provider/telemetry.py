@@ -118,6 +118,7 @@ class TurnMeter:
         turn_id: str | None = None,
         origin_turn_id: str | None = None,
         estimate_method: str = "none",
+        system_hash8: str = "",
     ):
         self._tracker = tracker
         self._clock = tracker.clock
@@ -125,6 +126,12 @@ class TurnMeter:
         self._finished = False
         self._usage: dict[str, int | None] | None = None
         self._usage_source: str | None = None
+        # Content-429 candidate observability (docs/429 doc P1): heuristic
+        # only, never a confirmed attribution; no system text is stored.
+        self._system_hash8 = system_hash8[:8]
+        self._detail_free_exhausted = False
+        self._retry_attempt: str | None = None
+        self._has_output = False
         self._cache_fields_present: dict[str, bool] = {
             "cachedReadTokens": False,
             "cachedWriteTokens": False,
@@ -172,6 +179,17 @@ class TurnMeter:
         retries = getattr(getattr(client, "text_guard", None), "retries", None)
         code = getattr(retries, "fast_fail_code", "")
         self.fast_abort_reason = code if code in {"QUOTA", "RATE_LIMIT", "AUTH"} else None
+        if retries is not None:
+            self._detail_free_exhausted = self._detail_free_exhausted or bool(
+                getattr(retries, "detail_free_seen", False)
+            )
+            attempt = getattr(retries, "attempt_number", None)
+            if attempt:
+                self._retry_attempt = str(attempt)
+
+    def observe_output(self, *, has_output: bool) -> None:
+        """Record whether this turn produced any body text, thought, or tool call."""
+        self._has_output = self._has_output or bool(has_output)
 
     def set_decision(
         self,
@@ -282,6 +300,20 @@ class TurnMeter:
             "status": status,
             "error_code": error_code if isinstance(error_code, str) and error_code else None,
         }
+        if (
+            self._detail_free_exhausted
+            and isinstance(error_code, str)
+            and error_code in {"QUOTA", "RATE_LIMIT"}
+        ):
+            # Heuristic candidate only: the same detail-free shape also matches
+            # genuine quota exhaustion, and real sustained throttling can hit
+            # the same signature with no output. CLI summary, not raw HTTP body.
+            record["content_429_candidate"] = {
+                "system_hash8": self._system_hash8 or None,
+                "system_bytes": self.system_bytes,
+                "has_output": self._has_output,
+                "attempt": self._retry_attempt,
+            }
         self._tracker.record_turn(record)
         return record
 
@@ -325,6 +357,7 @@ class TelemetryTracker:
         transient_bytes: int = 0,
         tool_schema_bytes: int = 0,
         origin_turn_id: str | None = None,
+        system_hash8: str = "",
     ) -> TurnMeter:
         return TurnMeter(
             self,
@@ -337,6 +370,7 @@ class TelemetryTracker:
             transient_bytes=transient_bytes,
             tool_schema_bytes=tool_schema_bytes,
             origin_turn_id=origin_turn_id,
+            system_hash8=system_hash8,
         )
 
     def record_turn(self, record: dict) -> None:
