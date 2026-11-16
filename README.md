@@ -13,6 +13,8 @@
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，将 Antigravity 接入 AstrBot 作为日常对话模型使用。
 
+> **开发中的 WebUI 监控面板**：计划扩展运行概览、上下文占用、Token/缓存趋势、会话复用与故障诊断，见 [开发计划与 TODO](docs/webui-observability-dashboard-plan.md)（仅计划，功能尚未实现）。
+
 ---
 
 ## 💡 为什么这份 README 分成了两部分？
