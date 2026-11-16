@@ -155,14 +155,18 @@ for line in sys.stdin:
             elif cur == "content-429-retry-info":
                 diagnostic += ' RetryInfo {"retryDelay":"30s"}'
             elif cur == "content-429-multiline":
-                diagnostic = diagnostic.replace(": Resource", "\nResource")
+                diagnostic = (
+                    "request failed: Post\n"
+                    '"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": '
+                    "RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota)."
+                )
             text_update(f"⚠ API error (attempt 1): {diagnostic}\n")
             # Attempt 2 arrives character by character: existing strong-rate
             # fast-fail may fire before this notice's trailing detail arrives.
             for char in f"⚠ API error (attempt 2): {diagnostic}\n":
                 text_update(char)
             # No terminal response: failures must abort rather than succeed on
-            # a fixture-generated RPC error. The multiline gap hits timeout.
+            # a fixture-generated RPC error.
             continue
         if cur in {"context-drop", "context-grow", "strong-quota", "strong-auth", "strong-rate", "partial-fatal"}:
             def update(value):

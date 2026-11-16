@@ -196,3 +196,196 @@ class MonitoringTests(unittest.IsolatedAsyncioTestCase):
         await self.service.close()
         self.assertEqual(self.context.registered_web_apis, [replacement])
         self.assertEqual((await handler())["status_code"], 503)
+
+    async def test_privacy_regression_safe_recent_turns_and_monitor_status(self):
+        inst = self.instance("priv")
+        now = 200.0
+        inst.runtime.telemetry.clock = lambda: now
+        secrets_by_kind = {
+            "prompt": "SENSITIVE_PROMPT_BODY_请勿泄露",
+            "system": "SENSITIVE_SYSTEM_PROMPT_人格原文",
+            "session_key": "SENSITIVE_SESSION_KEY_RAW_qq_98765",
+            "native_session_tag": "SENSITIVE_NATIVE_SESSION_TAG_xyz",
+            "tool_args": "SENSITIVE_TOOL_ARGS_SECRET_cmd",
+            "tool_schema": "SENSITIVE_TOOL_SCHEMA_SECRET_desc",
+            "candidate_system": "SENSITIVE_CANDIDATE_SYSTEM_leak",
+        }
+        meter = inst.runtime.telemetry.start_turn(
+            provider="priv",
+            session_key_raw=secrets_by_kind["session_key"],
+            mode="chat",
+            model="gemini-test",
+            effort="low",
+            system_bytes=120,
+            system_hash8="abcdef01",
+        )
+        meter.set_native_session("raw-native-session-id")
+        meter.request_sent = True
+        record = meter.finish(status="error", error_code="RATE_LIMIT")
+        record.update(
+            prompt=secrets_by_kind["prompt"],
+            system=secrets_by_kind["system"],
+            session_key=secrets_by_kind["session_key"],
+            native_session_tag=secrets_by_kind["native_session_tag"],
+            tool_args={"cmd": secrets_by_kind["tool_args"]},
+            arguments=secrets_by_kind["tool_args"],
+            tool_calls_detail=[{"name": "shell", "arguments": secrets_by_kind["tool_args"]}],
+            tool_schema={"description": secrets_by_kind["tool_schema"]},
+        )
+        record["cache_fields_present"]["extra_secret"] = secrets_by_kind["tool_args"]
+        record["content_429_candidate"] = {
+            "system_hash8": "abcdef01",
+            "system_bytes": 120,
+            "has_output": False,
+            "attempt": "2",
+            "system": secrets_by_kind["candidate_system"],
+            "prompt": secrets_by_kind["prompt"],
+        }
+        inst.runtime.sessions[secrets_by_kind["session_key"]] = Session(
+            client=types.SimpleNamespace(alive=True, context_usage=ContextUsage(), close=AsyncMock()),
+            model="gemini-test",
+        )
+
+        expected_turn_keys = {
+            "recorded_at", "model", "mode", "status", "error_code", "elapsed_ms",
+            "input_other", "input_cached", "output", "usage_status", "cache_fields_present",
+            "context_used", "context_window_size", "observed_at", "reused", "rebuild_reasons",
+            "prompt_bytes", "replay_bytes", "omitted_messages", "content_429_candidate",
+        }
+        projected = inst.runtime.telemetry.safe_recent_turns()
+        self.assertEqual(len(projected), 1)
+        self.assertEqual(set(projected[0]), expected_turn_keys)
+        self.assertEqual(set(projected[0]["cache_fields_present"]), {"cachedReadTokens", "cachedWriteTokens"})
+        self.assertEqual(
+            set(projected[0]["content_429_candidate"]),
+            {"system_hash8", "system_bytes", "has_output", "attempt"},
+        )
+
+        response = await self.service.handle()
+        self.assertEqual(response["status_code"], 200)
+        api_turns = response["data"]["instances"][0]["recent_turns"]
+        self.assertEqual(len(api_turns), 1)
+        self.assertEqual(set(api_turns[0]), expected_turn_keys)
+
+        for encoded in (
+            json.dumps(projected, ensure_ascii=False),
+            json.dumps(response["data"], ensure_ascii=False),
+        ):
+            for secret_value in secrets_by_kind.values():
+                self.assertNotIn(secret_value, encoded)
+            for forbidden_key in (
+                '"prompt"', '"system"', '"session_key"', '"native_session_tag"',
+                '"tool_args"', '"arguments"', '"tool_calls_detail"', '"tool_schema"',
+            ):
+                self.assertNotIn(forbidden_key, encoded)
+
+    async def test_context_null_without_usage_update_and_valid_sample_with_observed_at(self):
+        inst = self.instance("ctx")
+        client = AcpClient(Settings())
+        client.active, client.session_id = True, "ctx-session"
+        client.proc = types.SimpleNamespace(returncode=None)
+        client.close = AsyncMock()
+        inst.runtime.sessions["conv-ctx"] = Session(client=client, model="gemini-test")
+
+        # Token usage updates or zero/invalid context values must keep context_window_size null.
+        for update in (
+            None,
+            {"sessionUpdate": "usage_update", "usage": {"inputTokens": 200, "outputTokens": 50}},
+            {"sessionUpdate": "usage_update", "used": 0, "size": 0},
+        ):
+            if update is not None:
+                client._on_update({"sessionId": client.session_id, "update": update})
+            ctx = (await self.service.handle())["data"]["instances"][0]["latest_context"]
+            self.assertIsNone(ctx["context_used"])
+            self.assertIsNone(ctx["context_window_size"])
+            self.assertIsNone(ctx["observed_at"])
+            self.assertEqual(ctx["source"], "not_reported")
+
+        # Real ACP usage_update populates used, size, observed_at and source.
+        client._on_update({
+            "sessionId": client.session_id,
+            "update": {"sessionUpdate": "usage_update", "used": 42000, "size": 200000},
+        })
+        ctx = (await self.service.handle())["data"]["instances"][0]["latest_context"]
+        self.assertEqual(ctx["context_used"], 42000)
+        self.assertEqual(ctx["context_window_size"], 200000)
+        self.assertEqual(ctx["observed_at"], client.context_usage.observed_at)
+        self.assertIsNotNone(datetime.fromisoformat(ctx["observed_at"]).tzinfo)
+        self.assertEqual(ctx["source"], "acp_usage_update")
+
+    async def test_recent_turns_empty_limit_truncation_and_non_enum_convergence(self):
+        inst = self.instance("bounds")
+        telemetry = inst.runtime.telemetry
+        now = 300.0
+        telemetry.clock = lambda: now
+
+        # Empty history boundaries.
+        self.assertEqual(telemetry.safe_recent_turns(), [])
+        self.assertEqual(telemetry.safe_recent_turns(0), [])
+        empty_summary = telemetry.monitor_summary()
+        self.assertEqual(empty_summary["total_turns"], 0)
+        self.assertEqual(empty_summary["success_turns"], 0)
+        self.assertEqual(empty_summary["failed_turns"], 0)
+        self.assertIsNone(empty_summary["reuse_rate"])
+        self.assertIsNone(empty_summary["cache_token_ratio"])
+        self.assertIsNone(empty_summary["total_input_other"])
+        self.assertIsNone(empty_summary["total_input_cached"])
+        self.assertIsNone(empty_summary["total_output"])
+        self.assertEqual(empty_summary["rebuild_reasons"], [])
+
+        empty_resp = (await self.service.handle())["data"]["instances"][0]
+        self.assertEqual(empty_resp["recent_turns"], [])
+        self.assertEqual(empty_resp["summary"], empty_summary)
+
+        # Populate 25 turns to test limit=0, negative limit, truncation >20, and newest-first order.
+        for idx in range(25):
+            meter = telemetry.start_turn(
+                provider="bounds", session_key_raw=f"k-{idx}", mode="chat",
+                model="gemini-test", effort="low",
+            )
+            meter.prompt_bytes = idx
+            meter.request_sent = True
+            meter.finish(status="ok")
+
+        self.assertEqual(telemetry.safe_recent_turns(0), [])
+        self.assertEqual(telemetry.safe_recent_turns(-5), [])
+        self.assertEqual([r["prompt_bytes"] for r in telemetry.safe_recent_turns(5)], [24, 23, 22, 21, 20])
+        for arg in (None, 25, 10000):
+            rows = telemetry.safe_recent_turns() if arg is None else telemetry.safe_recent_turns(arg)
+            self.assertEqual(len(rows), 20)
+            self.assertEqual(rows[0]["prompt_bytes"], 24)
+            self.assertEqual(rows[-1]["prompt_bytes"], 5)
+
+        # Non-enum status / error_code / mode / usage_status / reasons / candidate convergence.
+        bad_meter = telemetry.start_turn(
+            provider="bounds", session_key_raw="k-bad", mode="chat",
+            model="x" * 300, effort="low",
+        )
+        bad_record = bad_meter.finish(status="ok")
+        bad_record.update(
+            mode="freeform_mode",
+            status="weird_status",
+            error_code="FREEFORM_UNKNOWN_ERR",
+            usage_status="bogus_usage",
+            rebuild_reasons=["freeform_reason", "system_changed", "abort"],
+            content_429_candidate={
+                "system_hash8": "NOT_HEX!",
+                "system_bytes": -10,
+                "has_output": "truthy-string",
+                "attempt": "not-digits",
+            },
+        )
+        converged = telemetry.safe_recent_turns(1)[0]
+        self.assertEqual(len(converged["model"]), 256)
+        self.assertEqual(converged["mode"], "unknown")
+        self.assertEqual(converged["status"], "unknown")
+        self.assertEqual(converged["error_code"], "UPSTREAM")
+        self.assertEqual(converged["usage_status"], "unavailable")
+        self.assertEqual(converged["rebuild_reasons"], ["abort", "system_changed"])
+        self.assertEqual(converged["content_429_candidate"], {
+            "system_hash8": None, "system_bytes": None, "has_output": False, "attempt": None,
+        })
+
+        # Empty string error_code converges to None rather than UPSTREAM.
+        bad_record["error_code"] = ""
+        self.assertIsNone(telemetry.safe_recent_turns(1)[0]["error_code"])

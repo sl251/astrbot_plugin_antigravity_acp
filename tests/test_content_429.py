@@ -87,10 +87,10 @@ class Content429IntegrationTests(unittest.IsolatedAsyncioTestCase):
                         "attempt": "2",
                     })
 
-    @unittest.expectedFailure
     async def test_multiline_detail_free_notice_fast_fails_without_output(self):
-        # Known gap: RetryNoticeGuard only accepts URL continuation lines.
-        # Keep the requested literal stream visible without modifying notices.py.
+        # Real CLI 1.5.6-1.5.8 captures only wrap '"https?://...' onto a
+        # continuation line (notices.py:64-80, test_notices.py:241-244), while
+        # 429 detail-free text stays single-line or follows that URL line.
         record = await self.run_failure("content-429-multiline")
         self.assertEqual(record["error_code"], "RATE_LIMIT")
         self.assertEqual(record["content_429_candidate"], {

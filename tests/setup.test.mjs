@@ -50,7 +50,7 @@ async function boot(initial = base()) {
     navigator: {clipboard: {writeText: async () => {throw new Error("iframe clipboard unavailable");}}},
     setTimeout: () => 1, clearTimeout: () => {},
   });
-  const api = await vm.runInContext(`(async () => {${source}\n; return {render, action, poll};})()`, context);
+  const api = await vm.runInContext(`(async () => {${source}\n; return {render, renderMonitor, action, poll};})()`, context);
   return {api, bridge, requests, handlers, doc: context.document, get: id => elements.get(id)};
 }
 
@@ -188,4 +188,68 @@ test("model save sends selected tools_mode with chat default", async () => {
   ui.get("model-form").onsubmit({preventDefault() {}});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(ui.requests[1].body.tools_mode, "tools");
+});
+
+function collectNodes(root) {
+  const nodes = [root];
+  for (const child of root.children || []) nodes.push(...collectNodes(child));
+  return nodes;
+}
+
+function monitorPayload(latestContext) {
+  return {
+    schema_version: 1,
+    sampled_at: "2026-11-17T00:00:00+00:00",
+    instances: [{
+      provider_id: "agy-main",
+      model: "gemini-test",
+      enabled: true,
+      tools_mode: "chat",
+      effective_mode: "chat",
+      tools_enabled: false,
+      runtime_state: "active",
+      pool: {active_sessions: 1, max_sessions: 8, live_processes: 1, active_tool_turns: 0},
+      summary: {
+        total_turns: 0, request_sent_turns: 0, success_turns: 0, failed_turns: 0,
+        reuse_rate: null, cache_token_ratio: null, unavailable_usage_turns: 0,
+        reported_usage_turns: 0, missing_cache_field_turns: 0,
+        total_input_other: null, total_input_cached: null, total_output: null,
+        rebuild_reasons: [],
+      },
+      latest_context: latestContext,
+      recent_turns: [],
+    }],
+  };
+}
+
+test("monitor renders null context_window_size without showing 0%", async () => {
+  const ui = await boot();
+  ui.api.renderMonitor(monitorPayload({
+    context_used: null, context_window_size: null, observed_at: null,
+    source: "not_reported", scope: "latest_live_session", model: "gemini-test",
+  }));
+  const nodes = collectNodes(ui.get("monitor-instances"));
+  const texts = nodes.map(n => n.textContent).filter(Boolean);
+  assert.ok(texts.includes("上游未报告"));
+  assert.equal(nodes.some(n => n.tag === "progress"), false);
+  for (const text of texts) {
+    assert.doesNotMatch(text, /(?:^|[^0-9.])0(?:\.0)?%/);
+  }
+});
+
+test("monitor renders real context usage sample with percentage and observed_at", async () => {
+  const ui = await boot();
+  ui.api.renderMonitor(monitorPayload({
+    context_used: 50000, context_window_size: 200000,
+    observed_at: "2026-11-17T00:00:00+00:00",
+    source: "acp_usage_update", scope: "latest_live_session", model: "gemini-test",
+  }));
+  const nodes = collectNodes(ui.get("monitor-instances"));
+  const texts = nodes.map(n => n.textContent).filter(Boolean);
+  const progress = nodes.find(n => n.tag === "progress");
+  assert.ok(progress);
+  assert.equal(progress.max, 200000);
+  assert.equal(progress.value, 50000);
+  assert.ok(texts.some(t => t.includes("50,000 / 200,000 Token · 25.0%")));
+  assert.ok(texts.some(t => t.includes("采样于") && !t.includes("未报告")));
 });
