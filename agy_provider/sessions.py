@@ -635,6 +635,13 @@ class Runtime:
                                         "RATE_LIMIT",
                                         "AGY 上游容量不可用，请稍后重试。",
                                     )
+                                if reason == "end_turn" and getattr(session.client, "permission_errors", None):
+                                    raise AgyError(
+                                        "TOOL_PERMISSION",
+                                        "AGY 工具权限请求被安全策略拒绝，随后 CLI 结束了本轮且未返回正文。"
+                                        "可能是内置工具被拒后 CLI 未将拒绝结果回喂模型；"
+                                        "请使用已暴露的 AstrBot MCP 工具，或改用纯聊天模式。",
+                                    )
                                 raise AgyError("EMPTY", "AGY 没有返回正文。")
                             if stripped_notices:
                                 logger.warning(

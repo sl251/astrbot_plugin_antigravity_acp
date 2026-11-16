@@ -33,7 +33,11 @@ try:
                 "id": "model", "currentValue": "gemini-test", "options": [{"value": "gemini-test", "name": "Gemini Test"}]}]}
         elif method == "session/prompt":
             # Force a built-in permission request: it must always be rejected.
-            send({"id": "permission-1", "method": "session/request_permission", "params": {"sessionId": "tool-session"}})
+            send({"id": "permission-1", "method": "session/request_permission", "params": {
+                "sessionId": "tool-session", "toolCall": {
+                    "name": "run_command", "toolCallId": "native-call-1", "status": "pending"
+                }, "options": [{"optionId": "allow", "kind": "allow_once"}],
+            }})
             permission = json.loads(sys.stdin.buffer.readline())
             if permission["result"]["outcome"]["outcome"] != "cancelled":
                 raise SystemExit(9)
@@ -43,6 +47,25 @@ try:
                 "name": "echo", "arguments": {"value": "中文 🦊"}, "_meta": {
                     "antigravity.google/conversation_id": "tool-session",
                     "antigravity.google/root_conversation_id": "tool-session"}}}
+            # Real AGY asks ACP permission BEFORE issuing tools/call. Built-in
+            # requests above stay denied, but the observed host MCP call must be
+            # allowed to reach the relay (host approval still happens later).
+            tool_call = {
+                "sessionUpdate": "tool_call", "toolCallId": "echo-call-1",
+                "name": "mcp_astrbot_echo", "status": "pending",
+                "rawInput": {"toolSummary": "Echo test", "value": "中文 🦊"},
+            }
+            update(tool_call)
+            send({"id": "mcp-permission-1", "method": "session/request_permission", "params": {
+                "sessionId": "tool-session", "toolCall": tool_call,
+                "options": [{"optionId": "allow-this-call", "kind": "allow_once"},
+                            {"optionId": "deny", "kind": "reject_once"}],
+            }})
+            permission = json.loads(sys.stdin.buffer.readline())
+            if permission.get("result", {}).get("outcome") != {
+                "outcome": "selected", "optionId": "allow-this-call"
+            }:
+                raise SystemExit(10)
             relay.stdin.write((json.dumps(request) + "\n").encode())
             relay.stdin.flush()
             reply = json.loads(relay.stdout.readline())

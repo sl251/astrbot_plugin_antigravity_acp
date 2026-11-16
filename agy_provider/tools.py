@@ -34,7 +34,8 @@ def _sanitize_for_gemini(schema, depth=0):
     ``items`` field; OpenAI-style schemas omit it, and AstrBot plugins generate
     schemas like ``{"type": "array"}`` (e.g. anysearch content_types), which the
     Gemini backend rejects with INVALID_ARGUMENT for the WHOLE request. Fill a
-    permissive string item schema; the host validates actual call arguments.
+    string item schema only for the model; execution validates the independent
+    original host schema so this compatibility hint cannot narrow its contract.
     """
     if depth > 8 or not isinstance(schema, dict):
         return schema
@@ -259,6 +260,7 @@ class ToolSnapshot:
             raise AgyError("TOOL_CONTEXT", "func_tool 必须为完整的宿主 ToolSet。")
         self.tools = []
         self.to_host = {}
+        self.to_host_schema = {}
         self.to_wire = {}
         self.skipped = []
         for tool in getattr(func_tool, "tools", []):
@@ -287,21 +289,23 @@ class ToolSnapshot:
                         "properties": {},
                         "additionalProperties": False,
                     }
-                _sanitize_for_gemini(schema)
                 validate_schema(schema)
                 if schema.get("type") != "object":
                     raise AgyError("TOOL_SCHEMA", "工具根参数必须为 object。")
+                wire_schema = _sanitize_for_gemini(copy.deepcopy(schema))
+                validate_schema(wire_schema)
             except AgyError as exc:
                 label = name if isinstance(name, str) and name else "<unnamed>"
                 self.skipped.append(f"{label}: {exc}")
                 continue
             self.to_host[wire] = name
+            self.to_host_schema[wire] = schema
             self.to_wire[name] = wire
             self.tools.append(
                 {
                     "name": wire,
                     "description": str(tool.description or ""),
-                    "inputSchema": schema,
+                    "inputSchema": wire_schema,
                 }
             )
         self.tools.sort(key=lambda item: item["name"])
@@ -309,7 +313,13 @@ class ToolSnapshot:
         if len(self.tools) > 128 or len(encoded_tools) > FRAME_LIMIT // 2:
             raise AgyError("TOOL_SCHEMA", "工具集超过预算。")
         self.schema_bytes = len(encoded_tools) if self.tools else 0
-        self.fingerprint = digest(self.tools) if self.tools else ""
+        # Distinct host contracts can have identical Gemini schemas (e.g. a
+        # missing items vs explicit string items). Both must invalidate reuse
+        # and host tool continuation when the contract changes.
+        self.fingerprint = (
+            digest({"tools": self.tools, "host_schemas": self.to_host_schema})
+            if self.tools else ""
+        )
 
     def notification_name(self, name):
         prefix = f"mcp_{SERVER_NAME}_"
@@ -473,10 +483,7 @@ class ToolBroker:
         if not isinstance(name, str) or name not in self.snapshot.to_host:
             raise AgyError("TOOL_UNKNOWN", "工具不在当前宿主许可集合。")
         arguments = params.get("arguments", {})
-        schema = next(
-            t["inputSchema"] for t in self.snapshot.tools if t["name"] == name
-        )
-        validate(arguments, schema)
+        validate(arguments, self.snapshot.to_host_schema[name])
         if (
             not isinstance(arguments, dict)
             or len(json.dumps(arguments).encode()) > FRAME_LIMIT // 2

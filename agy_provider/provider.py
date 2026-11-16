@@ -18,6 +18,7 @@ from .media import prepare_media
 from .messages import digest, normalize
 from .paths import plugin_data_root
 from .sessions import Runtime
+from .system_prompt import filter_host_capabilities
 from .telemetry import TurnMeter
 from .tool_turn import chat_events
 from .tools import ToolSnapshot
@@ -406,6 +407,10 @@ class AgyProvider(Provider):
                 trusted_parts=kwargs.get("agy_context_parts"),
                 reuse_mode=self.settings.session_reuse_mode,
             )
+            # Normalize validates any trusted split first; filtering its stable
+            # system cannot promote a previously invalid split into trusted data.
+            request.system = filter_host_capabilities(request.system)
+            request.system_bytes = len(request.system.encode())
             if not selected:
                 raise AgyError(
                     "MODEL", "请先获取 Gemini 模型列表并在 AstrBot 中选择具体模型。"

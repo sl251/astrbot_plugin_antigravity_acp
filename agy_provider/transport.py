@@ -22,6 +22,15 @@ class Event:
     result: dict | None = None
 
 
+@dataclass(frozen=True)
+class PermissionDenial:
+    """Bounded evidence for this prompt, without arguments or option contents."""
+
+    method: str
+    tool_name: str | None
+    tool_call_id: str | None
+
+
 class _AgentTextGuard:
     """Hold only possible standalone CLI failure lines, including split chunks."""
 
@@ -84,9 +93,11 @@ class AcpClient:
         self.initialized = False
         self.close_lock = asyncio.Lock()
         self.tool_broker = None
-        self.permission_errors: list[str] = []
+        self.permission_errors: list[PermissionDenial] = []
+        self.permission_grants: set[str] = set()
         self.prompt_deadline = 0
         self.prompt_terminal = False
+        self.prompt_request_id: int | None = None
         self.text_guard = _AgentTextGuard()
         self.stage = "idle"
         self.diagnostic_epoch = 0
@@ -122,7 +133,7 @@ class AcpClient:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.6.0"},
+                    "clientInfo": {"name": "astrbot-agy-provider", "version": "0.6.1"},
                 },
                 self.settings.startup_timeout,
             )
@@ -169,6 +180,8 @@ class AcpClient:
         self.stderr_diagnostics.clear()
         self.next_id += 1
         request_id = self.next_id
+        if method == "session/prompt":
+            self.prompt_request_id = request_id
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
         try:
@@ -314,6 +327,13 @@ class AcpClient:
                         continue
                     future = self.pending.get(request_id)
                     if future and not future.done():
+                        if request_id == self.prompt_request_id:
+                            # Close permissions at receipt, before request task
+                            # callbacks run: the next buffered frame may ask for
+                            # permission after this prompt has already ended.
+                            self.prompt_terminal = True
+                            if self.tool_broker is not None:
+                                self.tool_broker.turn_active = False
                         if "error" in obj:
                             self._record_usage_from_error(obj)
                             future.set_exception(
@@ -365,12 +385,95 @@ class AcpClient:
             # have a strict 16 KiB maximum and are never attached to an exception.
             window = window.rsplit(b"\n", 1)[-1] if b"\n" in window else window
 
+    def _mcp_permission_option(self, params: object) -> tuple[str, str] | None:
+        """Permit only an observed session MCP call to reach the host-owned bridge.
+
+        This is not host approval or execution. The later tools/call still passes
+        the broker's session/schema/budget checks and AstrBot's executor. Native
+        CLI tools, persistent grants and unbound requests remain fail-closed.
+        """
+        broker = self.tool_broker
+        if (
+            not self.alive
+            or not self._current_update(params)
+            or self.prompt_terminal
+            or asyncio.get_running_loop().time() >= self.prompt_deadline
+            or not isinstance(self.session_id, str)
+            or not self.session_id
+            or broker is None
+            or broker.closed
+            or not broker.turn_active
+            or broker.session_id != self.session_id
+        ):
+            return None
+        call = params.get("toolCall")
+        if not isinstance(call, dict):
+            return None
+        ident = call.get("toolCallId")
+        if not isinstance(ident, str) or not ident or ident in self.permission_grants:
+            return None
+        name = broker.snapshot.notification_name(call.get("name"))
+        observed = broker.notifications.get(ident)
+        if (
+            name is None
+            or observed is None
+            or observed[0] != name
+            or observed[1] not in ("pending", "in_progress")
+            or call.get("status") not in ("pending", "in_progress")
+        ):
+            return None
+        options = params.get("options")
+        if not isinstance(options, list):
+            return None
+        identifiers = set()
+        once = []
+        for option in options:
+            if not isinstance(option, dict):
+                return None
+            option_id = option.get("optionId")
+            if (
+                not isinstance(option_id, str)
+                or not option_id.strip()
+                or option_id in identifiers
+                or option.get("kind") not in (
+                    "allow_once", "allow_always", "reject_once", "reject_always"
+                )
+            ):
+                return None
+            identifiers.add(option_id)
+            if option.get("kind") == "allow_once":
+                once.append(option_id)
+        return (ident, once[0]) if len(once) == 1 else None
+
     async def _reject_request(self, obj: dict) -> None:
+        # Deny by default; an allow-once MCP transit grant never executes a tool.
         reply = {"jsonrpc": "2.0", "id": obj["id"]}
         if obj["method"] == "session/request_permission":
-            reply["result"] = {"outcome": {"outcome": "cancelled"}}
-            if len(self.permission_errors) < 128:
-                self.permission_errors.append("TOOL_PERMISSION_DENIED")
+            grant = self._mcp_permission_option(obj.get("params"))
+            if grant is not None:
+                ident, option_id = grant
+                self.permission_grants.add(ident)
+                reply["result"] = {
+                    "outcome": {"outcome": "selected", "optionId": option_id}
+                }
+            else:
+                reply["result"] = {"outcome": {"outcome": "cancelled"}}
+                params = obj.get("params")
+                # Foreign/idle/late requests must not explain this turn's EMPTY.
+                if (
+                    self._current_update(params)
+                    and not self.prompt_terminal
+                    and asyncio.get_running_loop().time() < self.prompt_deadline
+                    and len(self.permission_errors) < 128
+                ):
+                    call = params.get("toolCall")
+                    call = call if isinstance(call, dict) else {}
+                    name, ident = call.get("name"), call.get("toolCallId")
+                    self.permission_errors.append(PermissionDenial(
+                        method="session/request_permission",
+                        tool_name=name[:256] if isinstance(name, str) else None,
+                        tool_call_id=ident[:256] if isinstance(ident, str) else None,
+                    ))
         else:
             reply["error"] = {
                 "code": -32601,
@@ -472,10 +575,13 @@ class AcpClient:
         self.events = asyncio.Queue(maxsize=128)
         self.output_bytes = 0
         self.text_guard = _AgentTextGuard()
+        self.permission_grants.clear()
+        self.permission_errors.clear()
         self.active = True
         if self.tool_broker is not None:
             self.tool_broker.turn_active = True
         self.prompt_terminal = False
+        self.prompt_request_id = None
         self.prompt_sent = False
         self.latest_usage = None
         self.latest_usage_source = None

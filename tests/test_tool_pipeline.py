@@ -17,6 +17,7 @@ from agy_provider.process import LaunchInfo
 from agy_provider.sessions import Runtime
 from agy_provider.tools import ToolSnapshot
 from agy_provider.tool_turn import ToolTurn
+from agy_provider.transport import PermissionDenial
 
 
 class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +54,9 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
             client = tool.result["client"]
             self.assertTrue(client.context_usage.suspected_compaction)
             self.assertTrue(client.alive, "Must not retire before host side effect/result")
-            self.assertEqual(client.permission_errors, ["TOOL_PERMISSION_DENIED"])
+            self.assertEqual(client.permission_errors, [PermissionDenial(
+                "session/request_permission", "run_command", "native-call-1"
+            )])
             approver.assert_awaited_once_with("echo", {"value": "中文 🦊"}, call.id)
             continuation = ConversationInput(system="", messages=copy.deepcopy(request.messages) + [
                 {"role": "assistant", "content": "", "tool_calls": [{"id": call.id, "type": "function", "function": {
