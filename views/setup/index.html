@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <meta name="referrer" content="no-referrer">
   <title>Antigravity ACP</title>
   <link rel="stylesheet" href="./style.css">
@@ -13,12 +14,12 @@
       <div class="brand">
         <div class="brand-row">
           <h1>Antigravity ACP</h1>
-          <span class="tag">Google Gemini CLI</span>
+          <span class="tag">Gemini CLI</span>
         </div>
-        <p id="connection" class="connection" role="status">正在连接 AstrBot…</p>
+        <p id="connection" class="connection" role="status">正在连接…</p>
       </div>
       <div class="toolbar">
-        <button id="theme-toggle" class="btn btn-ghost btn-sm" type="button" title="切换界面主题">主题：自动</button>
+        <button id="theme-toggle" class="btn btn-ghost btn-sm" type="button">主题：自动</button>
       </div>
     </header>
 
@@ -27,16 +28,27 @@
     <section class="card monitor" id="monitor" aria-labelledby="monitor-heading">
       <div class="card-head">
         <div class="card-title">
-          <h2 id="monitor-heading">运行概览</h2>
-          <span id="monitor-badge" class="badge">正在加载</span>
+          <h2 id="monitor-heading">运行监控</h2>
+          <button id="monitor-help-btn" class="help-btn" type="button" popovertarget="monitor-help" aria-label="监控口径说明" aria-expanded="false">?</button>
+          <div id="monitor-help" class="help-popover" popover="auto" role="region" aria-label="监控口径说明">
+            <p class="help-title">统计口径与说明</p>
+            <ul>
+              <li>只读本地内存快照，不发送模型请求。</li>
+              <li><strong>近 24h</strong>：单实例最多保留 100 轮，进程重启清空；当前接口未下发启动以来持久化累计统计。</li>
+              <li><strong>实时</strong>：当前会话池与存活进程数，不代表 Google 账户剩余额度或上游在线状态。</li>
+              <li><strong>最近采样</strong>：单次存活会话最新有效上下文样本，不跨会话累加；缺失用量不按 0 计。</li>
+            </ul>
+          </div>
         </div>
-        <button id="monitor-refresh" class="btn btn-sm" type="button" disabled>刷新</button>
+        <div class="card-head-actions">
+          <span id="monitor-badge" class="badge">正在加载</span>
+          <button id="monitor-refresh" class="btn btn-sm" type="button" disabled>刷新</button>
+        </div>
       </div>
       <div class="card-body">
-        <p class="small">只读本地统计，不发送模型请求。最近 24 小时、每实例最多 100 轮，重启后清空；不代表 Google 账户剩余额度。</p>
         <p id="monitor-message" class="hint-text" role="status">正在读取运行快照…</p>
         <div id="monitor-instances" class="monitor-instances"></div>
-        <p id="monitor-updated" class="small">尚未取得快照 · 每 10 秒刷新，页面隐藏时暂停</p>
+        <p id="monitor-updated" class="small">等待快照 · 10s 自动刷新</p>
       </div>
     </section>
 
@@ -53,15 +65,22 @@
         <div class="card-body">
           <div class="meta-line">
             <span id="environment" class="meta-primary">正在读取系统信息…</span>
-            <span id="discovery-hint" class="meta-secondary"></span>
           </div>
           <div id="facts" class="facts"></div>
           <p id="check-hint" class="hint-text" role="status"></p>
           <div class="card-actions">
             <button id="check" class="btn" type="button" disabled>重新检测</button>
           </div>
+          <details id="env-diagnostics" class="drawer">
+            <summary>高级诊断</summary>
+            <div class="drawer-body">
+              <p id="discovery-hint" class="small"></p>
+              <dl id="env-diag-list" class="kv-list"></dl>
+              <p class="small">环境检测仅执行无生成预检，不发送对话请求。</p>
+            </div>
+          </details>
           <details id="install-details" class="drawer">
-            <summary>CLI 安装与路径说明</summary>
+            <summary>CLI 安装与路径</summary>
             <div class="drawer-body">
               <p id="install-hint" class="small"></p>
               <label for="install-command">安装命令</label>
@@ -74,7 +93,7 @@
                 <input id="install-url" readonly>
                 <button id="copy-install" class="btn btn-sm" type="button">复制</button>
               </div>
-              <p class="small">自定义路径可在插件配置填写 <code>command</code>（Windows 需指向 <code>agy.exe</code>）；代理可在配置中设置 <code>proxy_mode=custom</code>。</p>
+              <p class="small">自定义路径可在配置填写 <code>command</code>（Windows 指向 <code>agy.exe</code>）；自定义代理设 <code>proxy_mode=custom</code>。</p>
             </div>
           </details>
         </div>
@@ -90,19 +109,19 @@
           <span id="login-badge" class="badge">等待检查</span>
         </div>
         <div class="card-body">
-          <p id="login-hint" class="hint-text">检测通过后自动复用已有登录态，或启动官方 CLI 浏览器登录。</p>
+          <p id="login-hint" class="hint-text"></p>
           <div class="card-actions">
             <button id="login" class="btn" type="button" disabled>官方登录</button>
             <button id="cancel-login" class="btn btn-ghost" type="button" hidden>取消</button>
           </div>
           <div id="authorization" class="auth-box" hidden>
-            <label for="auth-url">1. 在浏览器打开授权链接</label>
+            <label for="auth-url">1. 打开授权链接</label>
             <div class="copy-row">
               <input id="auth-url" readonly autocomplete="off" spellcheck="false">
               <button id="copy-auth" class="btn btn-sm" type="button">复制链接</button>
             </div>
             <form id="code-form" autocomplete="off">
-              <label for="auth-code">2. 粘贴授权码（如浏览器返回）</label>
+              <label for="auth-code">2. 粘贴授权码</label>
               <div class="copy-row">
                 <input id="auth-code" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="粘贴一次性授权码" required>
                 <button id="submit-code" class="btn btn-primary btn-sm" type="submit">提交</button>
@@ -112,7 +131,7 @@
           <details class="drawer">
             <summary>终端命令行登录</summary>
             <div class="drawer-body">
-              <p class="small">在 AstrBot 运行环境以相同系统用户执行 <code>agy acp --login</code>（或直接运行 <code>agy</code>），完成后点击「重新检测」。</p>
+              <p class="small">在 AstrBot 同运行用户下执行 <code>agy acp --login</code>，完成后点击「重新检测」。</p>
             </div>
           </details>
         </div>
@@ -123,36 +142,45 @@
         <div class="card-head">
           <div class="card-title">
             <span class="step-index">03</span>
-            <h2 id="model-heading">模型与思考档位</h2>
+            <h2 id="model-heading">模型配置</h2>
+            <button id="model-help-btn" class="help-btn" type="button" popovertarget="model-help" aria-label="模型配置说明" aria-expanded="false">?</button>
+            <div id="model-help" class="help-popover" popover="auto" role="region" aria-label="模型配置说明">
+              <p class="help-title">模型与模式说明</p>
+              <ul>
+                <li><strong>思考强度</strong>：选「跟随全局」时使用插件主配置的默认档位。</li>
+                <li><strong>纯聊天</strong>：禁用工具调用，节省输入上下文（推荐）。</li>
+                <li><strong>跟随全局 / 工具模式</strong>：依据插件 <code>enable_tools</code> 决定是否启用工具。</li>
+              </ul>
+            </div>
           </div>
           <span id="model-badge" class="badge">等待登录</span>
         </div>
         <div class="card-body">
           <form id="model-form">
             <div class="fields">
-              <div class="field">
+              <div class="field field-wide">
                 <label for="model">Gemini 模型</label>
                 <select id="model" disabled><option value="">先完成环境检测</option></select>
               </div>
               <div class="field">
                 <label for="effort">思考强度</label>
-                <select id="effort" disabled><option value="default">跟随插件默认</option></select>
+                <select id="effort" disabled><option value="default">跟随全局</option></select>
               </div>
               <div class="field">
                 <label for="tools-mode">实例模式</label>
                 <select id="tools-mode" disabled>
-                  <option value="chat">纯聊天（推荐，无工具更省输入）</option>
-                  <option value="inherit">跟随插件 enable_tools</option>
-                  <option value="tools">工具模式（需开启 enable_tools）</option>
+                  <option value="chat">纯聊天（推荐）</option>
+                  <option value="inherit">跟随全局开关</option>
+                  <option value="tools">工具模式</option>
                 </select>
               </div>
             </div>
             <label class="checkbox">
               <input id="use-default" type="checkbox">
-              <span>设为 AstrBot 全局默认聊天模型</span>
+              <span>设为全局默认模型</span>
             </label>
             <div class="card-actions">
-              <button id="apply" class="btn btn-primary" type="submit" disabled>保存并启用模型</button>
+              <button id="apply" class="btn btn-primary" type="submit" disabled>保存并启用</button>
             </div>
           </form>
         </div>
@@ -163,19 +191,19 @@
         <div class="card-head">
           <div class="card-title">
             <span class="step-index">04</span>
-            <h2 id="finish-heading">已启用模型与会话切换</h2>
+            <h2 id="finish-heading">已启用实例</h2>
           </div>
           <span id="finish-badge" class="badge">等待配置</span>
         </div>
         <div class="card-body">
-          <p id="finish-hint" class="hint-text">保存模型后可在此复制会话切换命令。</p>
+          <p id="finish-hint" class="hint-text"></p>
           <div id="configured" class="provider-list"></div>
         </div>
       </section>
     </div>
 
     <footer class="footer">
-      <span>AGY ACP · 本地进程直连</span>
+      <span>AGY ACP · 本地直连</span>
       <span id="copy-status" class="copy-toast" role="status"></span>
     </footer>
   </main>

@@ -18,13 +18,32 @@ class Element {
   constructor(tag = "div") {
     this.tag = tag; this.value = ""; this.dataset = {}; this.children = [];
     this.hidden = false; this.disabled = false; this.checked = false; this.textContent = "";
+    this.open = false; this.className = ""; this.attributes = {};
+    this._classes = new Set();
+    this.classList = {
+      add: (...names) => names.forEach(n => this._classes.add(n)),
+      remove: (...names) => names.forEach(n => this._classes.delete(n)),
+      toggle: (name, force) => {
+        const next = force === undefined ? !this._classes.has(name) : Boolean(force);
+        if (next) this._classes.add(name); else this._classes.delete(name);
+        return next;
+      },
+      contains: name => this._classes.has(name) || this.className.split(/\s+/).includes(name),
+    };
   }
   replaceChildren(...children) {
     this.children = children;
     if (this.tag === "select") this.value = children[0]?.value || "";
   }
   append(...children) {this.children.push(...children);}
-  setAttribute() {}
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+    if (name === "class") {
+      this.className = String(value);
+      this._classes = new Set(this.className.split(/\s+/).filter(Boolean));
+    }
+  }
+  getAttribute(name) {return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null;}
   addEventListener(name, callback) {this[name] = callback;}
   focus() {this.focused = true;}
   select() {this.selected = true;}
@@ -44,7 +63,9 @@ async function boot(initial = base()) {
     document: {documentElement: new Element("html"), getElementById: id => {
       assert.ok(elements.has(id), `Missing element ${id}`);
       return elements.get(id);
-    }, createElement: tag => new Element(tag), hidden: false,
+    }, createElement: tag => new Element(tag), createElementNS: (_ns, tag) => new Element(tag),
+    createTextNode: text => ({tag: "#text", textContent: String(text), children: [], attributes: {}}),
+    hidden: false,
     addEventListener: (name, cb) => {handlers[name] = cb;}},
     Option: class {constructor(name, value) {this.text = name; this.value = value;}},
     navigator: {clipboard: {writeText: async () => {throw new Error("iframe clipboard unavailable");}}},
@@ -252,4 +273,169 @@ test("monitor renders real context usage sample with percentage and observed_at"
   assert.equal(progress.value, 50000);
   assert.ok(texts.some(t => t.includes("50,000 / 200,000 Token · 25.0%")));
   assert.ok(texts.some(t => t.includes("采样于") && !t.includes("未报告")));
+});
+
+test("passed environment streamlines main hints and moves technical facts to advanced diagnostics", async () => {
+  const data = base();
+  data.report = {
+    ...data.report,
+    model_count: 3,
+    customizations_mode: "minimal",
+    cli_flags: {include_default_customizations: true, disable_telemetry: true},
+    minimal_tools_status: "flag_available_unverified",
+    tool_bridge_transport: "unix_socket",
+    process_supervision: "posix_process_group",
+    proxy_mode: "system",
+    cli_update_status: "not_checked",
+  };
+  data.environment.discovery_hint = "当前默认搜索范围：PATH。";
+  const ui = await boot(data);
+  assert.deepEqual(ui.get("facts").children.map(n => n.textContent), ["CLI 1.5.2", "3 个可用模型"]);
+  assert.equal(ui.get("check-hint").textContent, "");
+  assert.equal(ui.get("login-badge").textContent, "已连接");
+  assert.equal(ui.get("login-hint").textContent, "");
+  assert.equal(ui.get("env-diagnostics").open, false);
+  const diagTexts = collectNodes(ui.get("env-diag-list")).map(n => n.textContent).filter(Boolean);
+  assert.ok(diagTexts.some(t => t.includes("Unix Socket")));
+  assert.ok(diagTexts.some(t => t.includes("独立进程组")));
+  assert.ok(diagTexts.some(t => t.includes("组件模式")));
+  assert.ok(diagTexts.some(t => t.includes("CLI 更新策略")));
+});
+
+test("save feedback avoids redundant placeholder text and help popovers toggle in fallback mode", async () => {
+  const saved = base();
+  saved.providers = [{id: "inst-1", model: "gemini-test", tools_mode: "chat", enabled: true}];
+  saved.result = {provider_id: "inst-1", default_selected: false};
+  const ui = await boot(saved);
+  assert.equal(ui.get("finish-badge").textContent, "已保存");
+  assert.equal(ui.get("finish-hint").textContent, "");
+
+  const withDefault = {...saved, result: {provider_id: "inst-1", default_selected: true}};
+  ui.api.render(withDefault);
+  assert.match(ui.get("finish-hint").textContent, /全局默认/);
+
+  assert.equal(ui.get("monitor-help").hidden, true);
+  ui.get("monitor-help-btn").click();
+  assert.equal(ui.get("monitor-help").hidden, false);
+  assert.equal(ui.get("monitor-help-btn").getAttribute("aria-expanded"), "true");
+  ui.handlers.keydown({key: "Escape"});
+  assert.equal(ui.get("monitor-help").hidden, true);
+  assert.equal(ui.get("monitor-help-btn").getAttribute("aria-expanded"), "false");
+});
+
+test("monitor renders 3-layer hierarchy, SVG charts, 429 candidates, and keeps overview free of internal field names", async () => {
+  const ui = await boot();
+  const payload = monitorPayload({
+    context_used: 80000, context_window_size: 200000,
+    observed_at: "2026-11-17T00:05:00+00:00",
+    source: "acp_usage_update", scope: "latest_live_session", model: "gemini-test",
+  });
+  payload.instances[0].summary = {
+    total_turns: 10, request_sent_turns: 8, success_turns: 7, failed_turns: 3,
+    reuse_rate: 0.75, cache_token_ratio: 0.6, unavailable_usage_turns: 1,
+    reported_usage_turns: 7, missing_cache_field_turns: 1,
+    total_input_other: 4000, total_input_cached: 6000, total_output: 2000,
+    rebuild_reasons: [["cold_start", 2], ["system_changed", 1]],
+  };
+  payload.instances[0].recent_turns = [
+    {
+      recorded_at: "2026-11-17T00:04:00+00:00", model: "gemini-test", mode: "chat",
+      status: "error", error_code: "RATE_LIMIT", elapsed_ms: 1450,
+      input_other: null, input_cached: null, output: null, usage_status: "unavailable",
+      cache_fields_present: {cachedReadTokens: false, cachedWriteTokens: false},
+      context_used: null, context_window_size: null, observed_at: null,
+      reused: false, rebuild_reasons: ["cold_start"],
+      prompt_bytes: 512, replay_bytes: 0, omitted_messages: 0,
+      content_429_candidate: {system_hash8: "a1b2c3d4", system_bytes: 2048, has_output: false, attempt: 2},
+    },
+    {
+      recorded_at: "2026-11-17T00:02:00+00:00", model: "gemini-test", mode: "chat",
+      status: "ok", error_code: null, elapsed_ms: 620,
+      input_other: 1000, input_cached: 3000, output: 500, usage_status: "reported",
+      cache_fields_present: {cachedReadTokens: true, cachedWriteTokens: false},
+      context_used: 80000, context_window_size: 200000, observed_at: "2026-11-17T00:02:00+00:00",
+      reused: true, rebuild_reasons: [],
+      prompt_bytes: 256, replay_bytes: 0, omitted_messages: 0,
+      content_429_candidate: null,
+    },
+  ];
+  ui.api.renderMonitor(payload);
+
+  const card = ui.get("monitor-instances").children[0];
+  const overview = card.children.find(n => n.className === "monitor-overview");
+  const layer2 = card.children.find(n => n.classList.contains("monitor-details"));
+  const layer3 = card.children.find(n => n.classList.contains("monitor-diag"));
+  assert.ok(overview);
+  assert.ok(layer2 && layer2.open === false);
+  assert.ok(layer3 && layer3.open === false);
+
+  const overviewTexts = collectNodes(overview).map(n => n.textContent).filter(Boolean);
+  assert.ok(overviewTexts.some(t => t === "实时会话池"));
+  assert.ok(overviewTexts.some(t => t.includes("近 24h")));
+  assert.ok(overviewTexts.some(t => t === "最近采样"));
+  assert.ok(overviewTexts.some(t => t === "7 / 3"));
+  assert.ok(overviewTexts.some(t => t.includes("RATE_LIMIT")));
+  for (const forbidden of ["tools_mode", "effective_mode", "active_sessions", "total_input_other", "cachedReadTokens", "content_429_candidate"]) {
+    assert.equal(overviewTexts.some(t => t.includes(forbidden)), false, `Overview exposed internal field ${forbidden}`);
+  }
+
+  const layer2Nodes = collectNodes(layer2);
+  const layer2Texts = layer2Nodes.map(n => n.textContent).filter(Boolean);
+  assert.ok(layer2Nodes.some(n => n.tag === "svg" && n.classList.contains("token-stack-svg")));
+  assert.ok(layer2Nodes.some(n => n.tag === "svg" && n.classList.contains("latency-svg")));
+  assert.equal(layer2Nodes.filter(n => n.tag === "svg" && n.classList.contains("gauge-svg")).length, 2);
+  assert.ok(layer2Texts.includes("75.0%"));
+  assert.ok(layer2Texts.includes("60.0%"));
+  assert.ok(layer2Texts.some(t => t.includes("冷启动 × 2")));
+
+  const layer3Texts = collectNodes(layer3).map(n => n.textContent).filter(Boolean);
+  assert.ok(layer3Texts.some(t => t.includes("a1b2c3d4") && t.includes("2,048B")));
+  assert.ok(layer3Texts.some(t => t.includes("reported=7")));
+
+  // Preserving expanded <details> open state across refresh polls
+  layer2.open = true;
+  layer2.toggle();
+  ui.api.renderMonitor(payload);
+  const refreshedLayer2 = ui.get("monitor-instances").children[0].children.find(n => n.classList.contains("monitor-details"));
+  assert.equal(refreshedLayer2.open, true);
+});
+
+test("monitor distinguishes genuine 0.0% reuse rate from missing/null data and renders inactive instances cleanly", async () => {
+  const ui = await boot();
+  const payload = monitorPayload({
+    context_used: null, context_window_size: null, observed_at: null,
+    source: "not_reported", scope: "latest_live_session", model: "gemini-test",
+  });
+  payload.instances[0].summary = {
+    total_turns: 3, request_sent_turns: 3, success_turns: 3, failed_turns: 0,
+    reuse_rate: 0, cache_token_ratio: null, unavailable_usage_turns: 0,
+    reported_usage_turns: 2, missing_cache_field_turns: 2,
+    total_input_other: 1200, total_input_cached: null, total_output: 300,
+    rebuild_reasons: [],
+  };
+  payload.instances.push({
+    provider_id: "agy-idle", model: "gemini-idle", enabled: false,
+    tools_mode: "inherit", effective_mode: "chat", tools_enabled: false,
+    runtime_state: "configured", pool: null, summary: null,
+    latest_context: {context_used: null, context_window_size: null, observed_at: null, source: "not_reported", scope: "latest_live_session", model: "gemini-idle"},
+    recent_turns: [],
+  });
+  ui.api.renderMonitor(payload);
+
+  const [activeCard, idleCard] = ui.get("monitor-instances").children;
+  const activeLayer2Texts = collectNodes(activeCard.children.find(n => n.classList.contains("monitor-details"))).map(n => n.textContent).filter(Boolean);
+  assert.ok(activeLayer2Texts.includes("0.0%"));
+  assert.ok(activeLayer2Texts.includes("未报告缓存字段"));
+  assert.ok(activeLayer2Texts.some(t => t.includes("缓存读取 上游未报告")));
+
+  const idleTexts = collectNodes(idleCard).map(n => n.textContent).filter(Boolean);
+  assert.ok(idleTexts.some(t => t.includes("已配置未初始化")));
+});
+
+test("stylesheet and HTML enforce mobile overflow safety and system dark theme support", () => {
+  const css = readFileSync(new URL("../views/setup/style.css", import.meta.url), "utf8");
+  assert.match(html, /<meta\s+name="color-scheme"\s+content="light dark">/);
+  assert.match(css, /@media\s*\(prefers-color-scheme:\s*dark\)/);
+  assert.match(css, /minmax\(min\(100%,\s*360px\),\s*1fr\)/);
+  assert.match(css, /overflow-wrap:\s*anywhere/);
 });
