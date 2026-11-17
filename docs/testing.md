@@ -29,8 +29,8 @@ python -m unittest tests.test_mcp_permissions tests.test_permission_attribution 
 # #13：原始 schema 与模型 schema 分离
 python -m unittest tests.test_tool_schemas -v
 
-# #14：system 过滤、429 候选与告警分类/冷却
-python -m unittest tests.test_system_prompt tests.test_content_429 tests.test_notices tests.test_failure_guard -v
+# #14 / #19：本地能力声明过滤、Safe Mode 定点改写、429 候选与告警分类/冷却
+python -m unittest tests.test_system_prompt tests.test_safe_mode_rule tests.test_content_429 tests.test_notices tests.test_failure_guard -v
 
 # 工具交接及部分输出后禁止重放
 python -m unittest tests.test_tool_pipeline tests.test_host_replay -v
@@ -68,7 +68,7 @@ git diff --check
 - 对照 `metadata.yaml`、main 注册、ACP clientInfo、MCP serverInfo 和 CHANGELOG 的当前版本；文档专项保持与当前发布基线一致；版本升级由维护者统一发布。
 - 当前基线 metadata 与 main 注册、ACP clientInfo、MCP serverInfo 已统一为 0.7.2（0.7.1 修复了此前的 0.6.1 标签漂移，本版随发布同步）。
 - 扫描“本版/下一版/待验收/未发布”等易过时词语。历史文件保留原始证据，但在入口标注时间和后续状态；不要把历史计划中的未实现项改成当前已交付。
-- 对 #12、#13、#14 走一遍文档导航，确认无需先读旧施工书就能找到源码、测试和保守结论。特别核验：一次性许可不绕过宿主、原始 schema 不被收窄、429 候选不是根因、已有输出不重放。
+- 对 #12、#13、#14、#19 走一遍文档导航，确认无需先读旧施工书就能找到源码、测试和保守结论。特别核验：一次性许可不绕过宿主、原始 schema 不被收窄、Safe Mode 仅定点改写、429 候选不是根因、已有输出不重放。
 
 ## 实机验收
 
