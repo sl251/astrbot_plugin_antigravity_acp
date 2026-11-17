@@ -45,7 +45,7 @@
 | ✅ 支持的功能 (Do) | ❌ 坚决不做的事 (Don't) |
 | :--- | :--- |
 | 调用本机官方 `agy` 客户端，走标准 stdio 管道通信 | **不做号池切换与多号轮询**（单实例仅绑定本机当前登录账号） |
-| 把 AstrBot 的对话上下文、图片和工具调用桥接给 `agy` | **不做提示词破限与客户端伪造**（原样传递上下文，不改 IDE 指纹） |
+| 把 AstrBot 的对话上下文、图片和工具调用桥接给 `agy` | **不做提示词破限与客户端伪造**（仅为已知宿主兼容问题定点处理 system，不改 IDE 指纹） |
 | 提供 WebUI 向导，辅助完成官方登录与模型选择 | **不提取或存储 OAuth Token**（登录凭证全归官方客户端保管） |
 | 独立的会话运行沙箱与进程清理机制 | **不开放未受控的本地终端与文件系统操作** |
 
@@ -130,7 +130,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 | CLI 内置文件、终端、web search/browser 继续拒绝；只有当前活跃 prompt 中已观测且匹配的快照 MCP 调用可获唯一 `allow_once`，宿主审批/校验/预算仍有效 | [MCP 权限与 schema](docs/architecture.md#mcp-的两层权限与两份-schema)，[#12 排障](docs/troubleshooting.md#empty权限拒绝与-12) |
 | 模型 schema 适配与宿主原始契约独立；执行按原始 schema 校验，两者均参与工具指纹 | [#13 参数排障](docs/troubleshooting.md#tool_arguments-与-13) |
 | 默认严格会话复用；已输出正文/思考或交接工具后失败禁止重试/fallback，避免重复副作用 | [会话与防重放](docs/architecture.md#会话历史与防重放) |
-| system 仅过滤已知宿主能力声明并定点兼容改写已知 Safe Mode 单句；4.30 文案处理不是 4.30 宿主兼容证明；`content_429_candidate` 是候选遥测，不是上游根因 | [过滤与 429 边界](docs/architecture.md#system-过滤与-429-的证据边界)，[#14 排障](docs/troubleshooting.md#rate_limit--quota-与-14) |
+| system 仅过滤已知宿主能力声明并定点兼容改写已知 Safe Mode 单句；4.30 文案处理不是 4.30 宿主兼容证明；`content_429_candidate` 是候选遥测，不是上游根因 | [过滤与 429 边界](docs/architecture.md#system-过滤与-429-的证据边界)，[#14 / #19 排障](docs/troubleshooting.md#rate_limit--quota-与-14) |
 | 检测/保存不等于真实生成；用量缺失保留未知；监控只读现有脱敏快照，不发模型请求 | [排障 SOP](docs/troubleshooting.md)，[实机验收分层](docs/testing.md#实机验收) |
 | 工具/图片默认关闭，要求插件与宿主双开关；不支持音频、视频、PDF 或图片生成 | [关键配置](docs/architecture.md#关键配置)、[配置 schema](_conf_schema.json) |
 
