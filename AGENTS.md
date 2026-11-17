@@ -2,8 +2,6 @@
 
 本仓库把官方 `agy acp`（stdio）接为 AstrBot 原生 `agy_acp` Provider。当前发布基线 **v0.7.2**，Python **3.11+**，AstrBot **`>=4.29.4,<4.30`**；版本以 [metadata.yaml](metadata.yaml) 为准。识别 4.30 的已知宿主提示文案，不代表兼容 4.30 的 runner/API。Hermes、Codex、AGY 从本页按任务读取资料，无需通读历史施工书。
 
-基线已知标签漂移：`main.py` 注册、ACP clientInfo 和 MCP serverInfo 仍标 `0.6.1`，不等于运行代码退回 0.6.1。文档专项如实记录，不顺带改运行文件；后续行为发布需统一版本声明。
-
 ## 必须保持的边界
 
 - 模型请求只走官方 CLI；不做 HTTP 反代、指纹伪造、号池或破限。隔离 `--gemini-dir`、`--app-data-dir` 与 workspace，拒绝 CLI 内置文件、终端、web search、browser 能力。
@@ -11,7 +9,7 @@
 - ACP 仅为当前活跃 prompt 中已观测、名称/ID/状态匹配的快照 MCP 调用选择唯一有效 `allow_once`；不得永久授权。跨会话、过期、重复、未知和内置工具继续拒绝。放行不等于执行，宿主仍负责审批、原始 schema 校验、预算与执行隔离。
 - 模型适配 schema 与宿主原始 schema 分开保存；执行按原始契约校验，两者均参与快照指纹。不得为兼容 Gemini 收窄宿主允许的数组值。
 - 已输出正文/思考或交接工具后失败，保留 `no_retry` + `no_fallback`，禁止自动重放。修改宿主兼容层须核对声明版本的真实 runner，不能只依赖异常属性。
-- system 仅过滤已知宿主能力声明；保留未知文案、人格和用户历史，不做通用删词或净化重试。`content_429_candidate` 仅为候选遥测，不能证明 Google 内容过滤、风控或额度根因。
+- system 只过滤已知失实宿主能力声明，并对结构锚定的 Safe Mode 已知单句做 #19 等义改写；保留其他人格与用户历史，不做通用删词或净化重试。`content_429_candidate` 仅为候选遥测，不能证明 Google 内容过滤、风控或额度根因。
 - 无生成自检、保存、真实生成分别验收；缺失 usage/退出码是未知，不能填成 0 或成功。监控只读，不得额外发模型请求或泄漏原始会话身份。
 
 ## 工作顺序
@@ -28,7 +26,7 @@
 | 安装、配置与日常使用 | [README](README.md) | [配置 schema](_conf_schema.json)、[Settings](agy_provider/config.py) |
 | ACP、会话复用、工具交接、防重放 | [架构与源码导航](docs/architecture.md) | `provider.py` → `sessions.py` / `tool_turn.py` → `transport.py` |
 | 报错、启动、登录、工具、模型、监控 | [排障 SOP](docs/troubleshooting.md) | 按错误码找证据、源码及测试 |
-| #12 MCP 一次性权限 / #13 数组 schema / #14 system 与 429 | [故障定位索引](docs/architecture.md#故障定位索引) | 索引直接对应当前源码与测试 |
+| #12 MCP 权限 / #13 数组 schema / #14 本地能力 429 / #19 Safe Mode 429 | [故障定位索引](docs/architecture.md#故障定位索引) | 源码与测试按症状直达，#19 先读 [429 排障](docs/troubleshooting.md#rate_limit--quota-与-14) |
 | 最小复现、测试命令、实机验收与报告 | [测试与交付规范](docs/testing.md) | [CI 矩阵](.github/workflows/test.yml) |
 | 发布历史与既有验收证据 | [CHANGELOG](CHANGELOG.md) | 仅在追溯指定版本时读历史计划/报告 |
 
