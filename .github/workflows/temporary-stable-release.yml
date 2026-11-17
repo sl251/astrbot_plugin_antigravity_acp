@@ -1,0 +1,33 @@
+name: Set ACP v0.7.2 as temporary latest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/temporary-stable-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  pin-stable:
+    if: github.repository == 'sl251/astrbot_plugin_antigravity_acp'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check release versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/448977278" --jq .tag_name)" = "v0.7.3"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/448327060" --jq .tag_name)" = "v0.7.2"
+      - name: Mark v0.7.3 as prerelease pending live tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/448977278" -F prerelease=true -f make_latest=false >/dev/null
+      - name: Mark v0.7.2 as latest stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/448327060" -F prerelease=false -f make_latest=true >/dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "v0.7.2"
