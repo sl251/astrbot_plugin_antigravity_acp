@@ -56,7 +56,9 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 60
 
 对照 [#14 原始报告](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/14) 与 [历史调研](429-prompt-investigation.md)：596B 宿主声明足以在报告环境触发 429，是已记录现象；上游真实判定维度仍未知。当前精确/结构化过滤先修正失实能力声明，离线测试成功不能证明该环境的上游 429 已消失。4.30 只作为文案样本，宿主支持范围仍小于 4.30。
 
-离线入口：`tests.test_system_prompt`、`tests.test_content_429`、`tests.test_notices`、`tests.test_failure_guard`；命令见 [testing.md](testing.md#定向回归)。
+**#19 Safe Mode 独立路径**：若 AstrBot 4.29.4 开启 Safe Mode，先确认实际 system 存在官方第 4 条规则，再检查 `filter_host_capabilities()` 是否在完整宿主安全规则列表内将 `style/role-play` 定点改写为 `style and role-play`；独立裸句、人格引用、代码块不应被泛化替换。v0.7.2 已在报告对应类型的真实 webchat 链路通过一次端到端验收，不能据此推断其他所有 429 均消失。见 [#19](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/19)、[版本验收记录](../CHANGELOG.md#072正式发布2026-11-17) 和 [定向测试](testing.md#定向回归)。
+
+离线入口：`tests.test_system_prompt`、`tests.test_safe_mode_rule`、`tests.test_content_429`、`tests.test_notices`、`tests.test_failure_guard`；命令见 [testing.md](testing.md#定向回归)。
 
 ## EMPTY、权限拒绝与 #12
 
