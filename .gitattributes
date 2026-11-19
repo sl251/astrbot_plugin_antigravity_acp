@@ -5,8 +5,5 @@
 /tests export-ignore
 /tools export-ignore
 /docs export-ignore
-/review-bundle export-ignore
+/docs/** export-ignore
 /AGENTS.md export-ignore
-/HANDOFF_0.4.0.md export-ignore
-/TEST_REPORT_0.4.0.md export-ignore
-/TEST_REPORT_0.4.1.md export-ignore

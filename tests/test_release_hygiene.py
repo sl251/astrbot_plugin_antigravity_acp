@@ -65,11 +65,12 @@ class ReleaseHygieneTests(unittest.TestCase):
             ignored = [
                 "tests",
                 "docs",
-                "review-bundle",
+                "docs/archive",
+                "docs/archive/review-bundle",
                 "tools",
                 ".github",
                 "AGENTS.md",
-                "HANDOFF_0.4.0.md",
+                "docs/archive/HANDOFF_0.4.0.md",
             ]
             kept = [
                 "main.py",

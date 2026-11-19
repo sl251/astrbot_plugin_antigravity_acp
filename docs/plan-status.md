@@ -18,10 +18,10 @@
 | [LiftGate 0.6.0 加固施工书](liftgate-hardening-plan.md) | #9 相关历史设计；当前契约和已验/未验要另见 [PR #9 验收](pr9-acceptance.md) 及 CHANGELOG |
 | [429 内容相关调研](429-prompt-investigation.md) | 旧阶段证据/假设；后续 #19 Safe Mode 与 #14 能力声明处理见 [兼容补丁](compatibility.md)，不能把所有 429 归为内容原因 |
 | [0.5.0 实现记录](impl-notes-0.5.0.md)、[PR #9 验收](pr9-acceptance.md) | 版本固定的历史验收材料，不证明当前所有部署平台已验 |
-| [旧版交接与报告](../HANDOFF_0.4.0.md)、[0.4.0](../TEST_REPORT_0.4.0.md)、[0.4.1](../TEST_REPORT_0.4.1.md) | 早期交接和测试证据，不作当前任务入口 |
-| [review-bundle](../review-bundle/) | 审读快照及旧补丁材料，包含历史源码副本；不可作为 v0.7.4 权威实现 |
+| [旧版交接与报告](archive/HANDOFF_0.4.0.md)、[0.4.0](archive/TEST_REPORT_0.4.0.md)、[0.4.1](archive/TEST_REPORT_0.4.1.md) | 早期交接和测试证据，不作当前任务入口 |
+| [review-bundle](archive/review-bundle/) | 审读快照及旧补丁材料，包含历史源码副本；不可作为 v0.7.4 权威实现 |
 
-保留原路径避免历史 Issue、PR、CHANGELOG 和外部引用失效；这里只做逻辑归档，不重写旧实测数据、不把“待测”擅自改成“通过”。
+历史 Issue、PR 与 CHANGELOG 仍按旧的根目录路径引用上述文件；本次只把它们归档到 `docs/archive/` 并同步本索引与安全说明，不重写旧实测数据、不把“待测”擅自改成“通过”。
 
 ## 待处理与待验证
 
