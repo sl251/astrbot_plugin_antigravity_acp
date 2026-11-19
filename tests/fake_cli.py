@@ -98,7 +98,10 @@ for line in sys.stdin:
         result = {
             "protocolVersion": 1,
             "agentCapabilities": {
-                "promptCapabilities": {"image": True, "private": "must-not-publish"}
+                "promptCapabilities": {
+                    "image": scenario != "no-image",
+                    "private": "must-not-publish",
+                }
             },
         }
     elif method == "session/new":
@@ -387,7 +390,7 @@ for line in sys.stdin:
                 "usage": {"inputTokens": 300, "outputTokens": 15},
             }
         else:
-            answer = f"reply:{prompt_seq}" if cur == "echo" else "fake answer"
+            answer = f"reply:{prompt_seq}" if cur in {"echo", "no-image"} else "fake answer"
             for kind, text in (
                 ("agent_thought_chunk", "fake reasoning"),
                 ("agent_message_chunk", answer),

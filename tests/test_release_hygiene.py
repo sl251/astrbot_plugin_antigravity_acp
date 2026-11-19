@@ -141,6 +141,29 @@ class ReleaseHygieneTests(unittest.TestCase):
         if any(b.get("type") == "image" for b in blocks):
             self.assertIn(expected_sha, blocks[0]["text"])
 
+        with self.subTest(budget=900, scenario="historical_image_retained_as_placeholder"):
+            blocks_900, omitted_900 = prompt_blocks(mm_messages, 900)
+            self.assertEqual(omitted_900, 2)
+            self.assertFalse(any(b.get("type") == "image" for b in blocks_900))
+            self.assertIn(expected_sha, blocks_900[0]["text"])
+            self.assertIn('"status": "historical"', blocks_900[0]["text"])
+            self.assertNotIn("Conversation attachment", blocks_900[0]["text"])
+
+        with self.subTest(budget=1000, scenario="current_turn_image_under_binary_trim"):
+            cur_img = {"type": "image", "mimeType": "image/png", "data": "WFla" * 30}
+            mm_cur_messages = mm_messages[:-1] + [
+                {"role": "user", "content": [{"type": "text", "text": "当前追问"}, cur_img]}
+            ]
+            cur_blocks, cur_omitted = prompt_blocks(mm_cur_messages, 1000)
+            self.assertEqual(cur_omitted, 2)
+            self.assertEqual([b.get("type") for b in cur_blocks], ["text", "text", "image"])
+            self.assertEqual(cur_blocks[1], {"type": "text", "text": "Conversation attachment 1:"})
+            self.assertEqual(cur_blocks[2], cur_img)
+            self.assertIn(expected_sha, cur_blocks[0]["text"])
+            self.assertIn('"status": "historical"', cur_blocks[0]["text"])
+            self.assertIn(digest(cur_img), cur_blocks[0]["text"])
+            self.assertIn('"attachment": 1', cur_blocks[0]["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -493,8 +493,10 @@ def validate_history(messages):
 def prompt_blocks(messages, budget):
     """Bounded transcript replay, explicitly NOT native tool-history restoration.
 
-    Images remain image blocks. Historical tool exchanges are quoted transcript
-    data and are trimmed only with their complete user turn.
+    Only images from the latest user message are attached as image blocks.
+    Earlier images keep a hash and historical status in the transcript.
+    Historical tool exchanges are quoted transcript data and are trimmed only
+    with their complete user turn.
     """
     if len(messages) == 1 and isinstance(messages[0]["content"], list):
         blocks = messages[0]["content"]
@@ -515,19 +517,28 @@ def prompt_blocks(messages, budget):
             for part in message["content"]:
                 if part["type"] == "image" and id(part) not in part_digests:
                     part_digests[id(part)] = digest(part)
+    last_user_idx = next(
+        (i for i in reversed(range(len(messages))) if messages[i].get("role") == "user"),
+        -1,
+    )
 
     def build_window(cut_index: int):
         tail = messages[cut_index:]
         images = []
         image_ids = {}
         history = []
-        for message in tail:
+        for msg_idx, message in enumerate(tail, start=cut_index):
             entry = dict(message)
             if isinstance(entry["content"], list):
                 content = []
                 for part in entry["content"]:
                     if part["type"] == "image":
                         identity = part_digests.get(id(part)) or digest(part)
+                        if msg_idx != last_user_idx:
+                            content.append(
+                                {"image_sha256": identity, "status": "historical"}
+                            )
+                            continue
                         if identity not in image_ids:
                             image_ids[identity] = len(image_ids) + 1
                             images.append(

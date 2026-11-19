@@ -102,7 +102,7 @@ flowchart LR
 | 代理 | `proxy_mode=inherit`；支持 `custom/direct`，custom 仅注入 CLI 子进程；容器内 localhost 指容器 |
 | 工具 | `enable_tools=false`；还需宿主 `tool_use`、实际 ToolSet、身份/取消信号；`agy_tools_mode=inherit/chat/tools`，chat 无工具，tools 不能绕过总闸；`tool_choice` 仅 auto/none |
 | 工具预算 | 16 次、并发 1、审批 60 秒、执行 120 秒、结果总计 262144 字节；超限报错，不静默截断 |
-| 图片 | `enable_images=false`；还需宿主 image 与 CLI image 能力；PNG/JPEG 默认最多 8 张（可配 1–16），PNG 支持 8 位灰度/索引色/RGB/RGBA 并在校验 CRC 后剥离 `zTXt`/`iCCP`/`iTXt` 辅助块，字节/像素有界，本地目录必须在 `media_roots`；音频/视频/PDF/生成图片未接入 |
+| 图片 | `enable_images=false`；还需宿主 image 与 CLI image 能力；PNG/JPEG 默认最多 8 张（可配 1–16），PNG 支持 8 位灰度/索引色/RGB/RGBA 并在校验 CRC 后剥离 `zTXt`/`iCCP`/`iTXt` 辅助块，字节/像素有界，本地目录必须在 `media_roots`；音频/视频/PDF/生成图片未接入。会话重建时，仅最新用户消息中的图片作为附件发送，历史图片在转录中仅保留哈希和 `historical` 标记。 |
 | 思考档位 | 调用 `agy_thought_level` 优先于 Provider `custom_extra_body`；选出的 default 继承全局 `thought_level`，全局也 default 才用 CLI 默认；始终校验当前模型目录/选项，不硬编码模型 ID |
 | 历史/输出 | `history_bytes=160000`、`max_output_bytes=4194304`；不宣称原样发送无限历史，采样参数 temperature/top_p/max_tokens 无对应透传保证 |
 | 组件实验 | `agy_customizations_mode=inherit`；minimal 仅在已探测支持参数的工具默认 Agent 启用，真实 MCP/A-B 仍需另验；不自动下载安装/热替换 CLI |

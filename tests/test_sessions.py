@@ -1,8 +1,12 @@
+import base64
+import binascii
 import json
 import os
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -11,6 +15,7 @@ from tests import astrbot_stub  # noqa: F401 -- install the offline host logger
 
 from agy_provider.config import Settings
 from agy_provider.errors import AgyError
+from agy_provider.media import prepare_media
 from agy_provider.messages import (
     TRANSIENT_SYSTEM_NOTICE,
     ConversationInput,
@@ -534,6 +539,253 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(d_evict.reuse)
         self.assertEqual(d_evict.reasons, ["idle_expired"])
+
+
+def _minimal_png_data_url() -> str:
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        crc = binascii.crc32(kind + body) & 0xFFFFFFFF
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)
+    raw_rows = (b"\x00" + b"\x10" * 6) * 2
+    idat = zlib.compress(raw_rows)
+    raw_png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(raw_png).decode("ascii")
+
+
+class SessionImageRebuildTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="agy-session-images-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.log_path = self.root / "cli.jsonl"
+
+    async def _run_turn(self, runtime, request, key="img-sess", model="gemini-test", effort="low"):
+        text_parts = []
+        done_event = None
+        async for event in runtime.stream(request, key, model, effort):
+            if event.kind == "text":
+                text_parts.append(event.text)
+            elif event.kind == "done":
+                done_event = event
+        return "".join(text_parts), done_event
+
+    async def test_image_turn_then_plain_text_rebuild_drops_historical_image_attachment(self):
+        settings = Settings(auth_bridge=False, enable_images=True, session_reuse_mode="strict")
+        runtime = Runtime(settings, self.root / "rt-rebuild")
+        self.addAsyncCleanup(runtime.close)
+        png_url = _minimal_png_data_url()
+
+        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+            return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+
+        with (
+            patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
+            patch(
+                "agy_provider.sessions.discover",
+                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+            ),
+            patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
+            patch.object(runtime, "open", wraps=runtime.open) as open_spy,
+        ):
+            raw1, parts1 = await prepare_media([], "看这张图", None, [png_url], settings)
+            req1 = normalize(
+                raw1,
+                "看这张图",
+                "系统设定 A",
+                parts1,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            expected_sha = digest(req1.messages[0]["content"][1])
+            ans1, _ = await self._run_turn(runtime, req1)
+            self.assertEqual(ans1, "reply:1")
+            self.assertEqual(open_spy.await_count, 1)
+
+            hist = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "看这张图"},
+                        {"type": "image_url", "image_url": {"url": png_url}},
+                    ],
+                },
+                {"role": "assistant", "content": ans1},
+            ]
+            raw2, parts2 = await prepare_media(hist, "纯文本追问", None, None, settings)
+            req2 = normalize(
+                raw2,
+                "纯文本追问",
+                "系统设定 B",
+                parts2,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            ans2, _ = await self._run_turn(runtime, req2)
+            self.assertEqual(ans2, "reply:1")
+            self.assertEqual(open_spy.await_count, 2)
+
+        prompts = [e for e in _read_cli_log(self.log_path) if e["event"] == "prompt"]
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("image", prompts[0]["block_types"])
+        self.assertEqual(prompts[1]["block_types"], ["text"])
+        self.assertIn(expected_sha, prompts[1]["texts"][0])
+        self.assertIn('"status": "historical"', prompts[1]["texts"][0])
+        self.assertNotIn("Conversation attachment", prompts[1]["texts"][0])
+        turns = list(runtime.telemetry.history)
+        self.assertFalse(turns[1]["reused"])
+        self.assertIn("system_changed", turns[1]["rebuild_reasons"])
+
+    async def test_image_turn_then_plain_text_reuse_preserves_hashes_and_single_open(self):
+        settings = Settings(auth_bridge=False, enable_images=True, session_reuse_mode="strict")
+        runtime = Runtime(settings, self.root / "rt-reuse")
+        self.addAsyncCleanup(runtime.close)
+        png_url = _minimal_png_data_url()
+
+        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+            return [sys.executable, str(FIXTURE), "echo", *args[1:]]
+
+        with (
+            patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
+            patch(
+                "agy_provider.sessions.discover",
+                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+            ),
+            patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
+            patch.object(runtime, "open", wraps=runtime.open) as open_spy,
+        ):
+            raw1, parts1 = await prepare_media([], "记住这张图", None, [png_url], settings)
+            req1 = normalize(
+                raw1,
+                "记住这张图",
+                "稳定系统设定",
+                parts1,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            ans1, _ = await self._run_turn(runtime, req1)
+            self.assertEqual(ans1, "reply:1")
+            self.assertEqual(open_spy.await_count, 1)
+
+            hist = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "记住这张图"},
+                        {"type": "image_url", "image_url": {"url": png_url}},
+                    ],
+                },
+                {"role": "assistant", "content": ans1},
+            ]
+            raw2, parts2 = await prepare_media(hist, "继续纯文本提问", None, None, settings)
+            req2 = normalize(
+                raw2,
+                "继续纯文本提问",
+                "稳定系统设定",
+                parts2,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            ans2, _ = await self._run_turn(runtime, req2)
+            self.assertEqual(ans2, "reply:2")
+            self.assertEqual(open_spy.await_count, 1)
+
+        prompts = [e for e in _read_cli_log(self.log_path) if e["event"] == "prompt"]
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("image", prompts[0]["block_types"])
+        self.assertEqual(prompts[1]["block_types"], ["text"])
+        self.assertNotIn("astrbot_history", "\n".join(prompts[1]["texts"]))
+        self.assertIn("继续纯文本提问", "\n".join(prompts[1]["texts"]))
+
+        last_record = runtime.telemetry.history[-1]
+        self.assertTrue(last_record["reused"])
+        self.assertEqual(last_record["history_relation"], "exact")
+        self.assertEqual(last_record["replay_bytes"], 0)
+
+    async def test_image_history_rebuild_on_non_image_cli_allows_text_and_blocks_new_image(self):
+        settings = Settings(auth_bridge=False, enable_images=True, session_reuse_mode="strict")
+        runtime = Runtime(settings, self.root / "rt-no-image")
+        self.addAsyncCleanup(runtime.close)
+        png_url = _minimal_png_data_url()
+        launch_scenarios = ["echo", "no-image"]
+
+        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+            scenario = launch_scenarios.pop(0) if launch_scenarios else "no-image"
+            return [sys.executable, str(FIXTURE), scenario, *args[1:]]
+
+        with (
+            patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
+            patch(
+                "agy_provider.sessions.discover",
+                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+            ),
+            patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
+            patch.object(runtime, "open", wraps=runtime.open) as open_spy,
+        ):
+            raw1, parts1 = await prepare_media([], "首轮带图", None, [png_url], settings)
+            req1 = normalize(
+                raw1,
+                "首轮带图",
+                "系统设定 A",
+                parts1,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            ans1, _ = await self._run_turn(runtime, req1)
+            self.assertEqual(ans1, "reply:1")
+            self.assertEqual(open_spy.await_count, 1)
+
+            hist1 = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "首轮带图"},
+                        {"type": "image_url", "image_url": {"url": png_url}},
+                    ],
+                },
+                {"role": "assistant", "content": ans1},
+            ]
+            raw2, parts2 = await prepare_media(hist1, "无图能力重建追问", None, None, settings)
+            req2 = normalize(
+                raw2,
+                "无图能力重建追问",
+                "系统设定 B",
+                parts2,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            ans2, _ = await self._run_turn(runtime, req2)
+            self.assertEqual(ans2, "reply:1")
+            self.assertEqual(open_spy.await_count, 2)
+
+            hist2 = hist1 + [
+                {"role": "user", "content": "无图能力重建追问"},
+                {"role": "assistant", "content": ans2},
+            ]
+            raw3, parts3 = await prepare_media(hist2, "当前轮再带图", None, [png_url], settings)
+            req3 = normalize(
+                raw3,
+                "当前轮再带图",
+                "系统设定 B",
+                parts3,
+                settings.history_bytes,
+                images=settings.enable_images,
+            )
+            with self.assertRaises(AgyError) as caught:
+                await self._run_turn(runtime, req3)
+            self.assertEqual(caught.exception.code, "IMAGE_CAPABILITY")
+
+        prompts = [e for e in _read_cli_log(self.log_path) if e["event"] == "prompt"]
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(prompts[1]["block_types"], ["text"])
 
 
 import asyncio  # noqa: E402
