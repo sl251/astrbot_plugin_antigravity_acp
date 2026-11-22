@@ -108,7 +108,8 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 60
 - **v0.7.4 图片修复的边界（#24）**：会话重建时，`prompt_blocks()` 仅附带当前用户轮的图片，旧图改为哈希占位；但 `prepare_media()` 仍对历史消息中的图片源逐一读取、验证并计入图片数量/字节限制。旧图失效或长历史累积过多可能在发给 AGY 之前报 `IMAGE*`/预算错误；这不是已修复的重复发送，也不能靠调高预算或放宽 SSRF/本地目录边界作为通用修复。优先收集脱敏的消息数、历史图片数、源类型、具体错误码，见 [计划状态索引](plan-status.md#待处理与待验证)。
 - `/agy cost` 和 `monitor/status` 只读本地样本。实时池、近 24 小时、最近上下文采样是不同口径；未知 usage/占用不能显示成 0 或余额。重启后无历史不代表从未消耗。
 - monitor 返回 401/403 时核对 Dashboard 配置管理员；API Key 被该 endpoint 明确拒绝，不关闭鉴权。不要把聊天管理员权限当作 Dashboard 身份。
-- WebUI 使用原生 iframe bridge、当前 nonce 与轮询终态；旧响应、登录归属、复制失败、窄屏/主题等按 [实机验收](testing.md#实机验收) 单独检查。
+- WebUI 使用原生 iframe bridge、当前 nonce 与轮询终态；旧响应、登录归属、复制、窄屏/主题等按 [实机验收](testing.md#实机验收) 单独检查。
+- 面板复制按钮依赖「用户手势内」的同步降级链：宿主 iframe 为 `sandbox="allow-scripts allow-forms allow-downloads"`（无 `allow-same-origin`/`clipboard-write`），且面板多为 `http://<ip>:6185` 非安全上下文，`navigator.clipboard` 不存在属预期。只能先试 Clipboard API，再同步 `execCommand("copy")`，最后退回选中文本；不要改成 `await` 之后再复制，那会丢掉手势导致 `execCommand` 返回 false。授权链接无法新开窗口是宿主未授 `allow-popups`，页面只能提示改用复制。
 
 ## 检查通过但聊天仍失败
 

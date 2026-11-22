@@ -1,5 +1,14 @@
 # 变更记录
 
+## 0.7.5（正式发布，2026-11-22）
+
+- **修复 #28：设置面板复制按钮全部失效（含卡住 Google 登录）**：AstrBot 4.29.4 把插件页放进 `sandbox="allow-scripts allow-forms allow-downloads"` 的 iframe（无 `allow-same-origin`、无 `allow="clipboard-write"`、无 `allow-popups`），面板又通常经 `http://<ip>:6185` 访问（非安全上下文），此时 `navigator.clipboard` 为 `undefined`；原 `copy()` 只有 Clipboard API 一条路径，失败仅向页脚写一行小字。现改为三级降级：`navigator.clipboard?.writeText` → 点击手势内同步执行临时 `textarea` + `document.execCommand("copy")` → 两者都失败才选中原文并提示快捷键；4 类复制入口（安装命令、官方文档、授权链接、`复制命令`）均把按钮自身传入并就地显示「已复制 ✓ / 请手动复制」，`#copy-status` 改为底部居中浮层、3s 自动消失。授权链接新增「在新标签打开」，`window.open` 被 sandbox 拦截时明确提示改用复制。
+- **轮询不再破坏手工操作**：`#install-url`、`#install-command`、`#auth-url` 赋值前比较，`#facts`、`#env-diag-list` 改为内容签名差量渲染；此前 5s 轮询会把用户手工选区折叠回末尾，使复制表现为随机失败。`poll()` 失败改为 5/10/20/30s 退避并在成功后只清除自身错误横幅（与 action 错误分来源管理），标签页隐藏时暂停、可见时立即刷新；`pagehide` 判断 `event.persisted`，bfcache 返回经 `pageshow` 恢复轮询与监控；`render()` 对 `report`/`login`/`environment`/`providers` 加缺省值，`action()` 在 `await` 后判 `disposed`，避免二次抛错；「CLI 安装与路径」仅在错误码变化时自动展开一次。
+- **可访问性与视觉修正**：浅色主题新增 `--ok-text: #047857`、`--bad-text: #b91c1c`（`#f4f4f5` 上 4.99:1 / 5.89:1，满足 WCAG AA 小字号要求），供 `.tone-ok`/`.tone-error`/`.monitor-faults code` 使用；监控区按快照签名跳过重建，保留展开状态与列表滚动位置；`monitor-metric-sub` 移入 `dd` 内使 `dl` 语义合法；`.copy-row` 窄屏换行、顶栏吸顶、`use-default` 保存后复位、字节数走 `formatBytes`（不再出现「未知B」）、展开键加入实例索引、主题改为 auto→light→dark 三态并持久化（`try/catch` 兼容 sandbox 存储异常，auto 优先继承宿主 `isDark`）、`login.error_code` 与 `action_error` 中文化并保留原始码。
+- **测试与验收**：`tests/setup.test.mjs` 假 DOM 补齐 `document.body`、`document.execCommand`、`localStorage`、`Element.remove`，新增三级降级复制、弹窗拦截提示、bfcache 恢复、三态主题、轮询退避、重复实例 ID 展开隔离等用例；离线全量回归 278 项（266 通过 / 0 失败 / 12 项平台跳过）、`node --test` 29/29、`compileall`、`node --check`、`git diff --check` 全部通过；独立只读验收 21 条逐项核对通过（PR [#29](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/29)）。
+- **实机验收（2026-11-22，小鱼 / shanghai，AstrBot 4.29.4）**：分支前端预部署后由管理员按清单手动验收 12 项通过——4 类复制入口均写入正确内容、授权链接打开被拦截时提示明确、选中文本静置 10s 不被轮询打断、监控展开后焦点与滚动位置保持、主题三态与刷新后持久、窄屏复制行换行；控制台无报错。已知限制：`execCommand` 已被标准标记弃用，但它是非安全上下文 + sandbox iframe 下唯一可用路径，若未来浏览器移除则只剩「选中文本 + 快捷键」兜底；`clipboard.writeText` 与 `execCommand` 会先后尝试，在个别会为 `writeText` 弹权限确认的浏览器上可能出现一次多余提示。
+- **文档**：README、AGENTS.md、`docs/architecture.md`、`docs/troubleshooting.md` 同步 WebUI 剪贴板边界与新的降级路径说明。
+
 ## 0.7.4（正式发布，2026-11-19）
 
 - **修复 #24：会话重建时历史图片被重复提取为当前轮附件**：`prompt_blocks()` 的 `build_window()` 此前未区分当前最新用户轮与历史轮，把窗口内所有历史用户消息的图片一并提取为当前 `session/prompt` 末尾的真实 ACP `image` 块附件——用户发过一次图后，后续纯文本轮只要触发会话重建（system 变化、空闲过期、进程重启等），旧图即随请求重发，造成视觉 token 浪费、模型误判当前轮收到新图（围绕旧图幻觉作答），无视觉能力 CLI 环境下纯文本轮还会误报 `IMAGE_CAPABILITY`。修复后以 `last_user_idx` 反向定位最新用户消息（无 user 消息时安全返回 `-1`），`enumerate(tail, start=cut_index)` 保持裁剪前原始下标对齐，仅当前轮图片作为附件发送并按出现顺序编号；历史图片在转录 JSON 中保留 `{"image_sha256": ..., "status": "historical"}` 占位（不带 `attachment` 键）；历史轮不写入 `image_ids`，跨轮显式重发同图仍正常附带。会话复用路径（仅发最后一条消息）不受影响。
