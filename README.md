@@ -11,7 +11,7 @@
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，把 Antigravity 模型安全、稳定地接入 AstrBot，作为日常对话主力。
 
-> 💡 **版本速递（v0.7.5，2026-11-22）**：修复 #28——AstrBot 插件页运行在受限 sandbox iframe 且面板常走 HTTP，`navigator.clipboard` 不可用导致「复制」按钮全部失效（含卡住 Google 登录的授权链接）。现在复制改走「Clipboard API → `execCommand` 同步兜底 → 选中文本」三级降级，按钮就地反馈并新增「在新标签打开」；同时修正轮询打断手工选区、bfcache 失效、浅色对比度与三态主题等 20 项 UI 问题。详细改动见 [CHANGELOG.md](CHANGELOG.md)。
+> 💡 **版本速递（v0.7.5，2026-11-22）**：修复 #28——AstrBot 插件页运行在受限 sandbox iframe 且面板常走 HTTP，`navigator.clipboard` 不可用导致「复制」按钮全部失效（含卡住 Google 登录的授权链接）。现在复制改走「Clipboard API → `execCommand` 同步兜底 → 选中文本」三级降级，按钮就地反馈并新增「在新标签打开」；同时修正轮询打断手工选区、bfcache 失效、浅色对比度与三态主题等 21 项 UI 问题。详细改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
