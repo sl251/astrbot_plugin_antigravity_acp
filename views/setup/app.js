@@ -2,12 +2,19 @@ const $ = (id) => document.getElementById(id);
 const bridge = window.AstrBotPluginView;
 const SVG_NS = "http://www.w3.org/2000/svg";
 let state, pending = false, disposed = false, timer, revision = 0, cachedModels = [], modelSignature = "", effortSignature = "", providerSignature = "";
-let themeMode = "auto", nextManualTheme = "dark";
+let themeMode = "auto";
+const themeKey = "agy-acp.setup.theme";
+let previousInstallError, resultSignature, monitorSignature, toastTimer, copyAttempt = 0;
+let pollFailures = 0, pollPending = false, suspended = false, refreshEpoch = 0;
+const bannerErrors = {action: "", poll: ""};
+const buttonFeedback = new WeakMap();
+const listSignatures = new WeakMap();
 let monitorTimer, monitorPending = false, monitorReady = false, monitorSnapshot, reportDiagSignature = "";
 const expandedMonitorSections = new Set();
+const relativeTimeLabels = new Map();
 const fallbackPopovers = [];
 
-const activeLogin = (login) => login.busy;
+const activeLogin = (login) => Boolean(login?.busy);
 const stages = {
   discovery: "查找 CLI", isolation: "检查隔离目录", authentication: "检查认证",
   initialize: "ACP 握手", "session/new": "验证登录", model_catalog: "读取模型目录",
@@ -38,6 +45,16 @@ const faultLabels = {
   CANCELLED: "已取消", EMPTY: "空响应", UPSTREAM: "上游异常", PROTOCOL: "协议异常",
 };
 
+const actionLabels = {
+  ...faultLabels, LOGIN_EXPIRED: "登录已过期", LOGIN_URL: "授权链接异常",
+  UNSUPPORTED: "不支持此操作", CONFIG: "配置错误", IMAGE: "图片处理失败",
+};
+
+function actionErrorLabel(code) {
+  const label = Object.hasOwn(actionLabels, code) ? actionLabels[code] : "操作失败";
+  return `${label}（${code}）`;
+}
+
 function formatFaultBrief(code) {
   const label = faultLabels[code];
   return label ? `${label} (${code})` : code;
@@ -45,20 +62,22 @@ function formatFaultBrief(code) {
 
 function applyTheme() {
   const root = document.documentElement;
-  if (!root) return;
-  if (themeMode === "light" || themeMode === "dark") {
-    root.dataset.theme = themeMode;
-    nextManualTheme = themeMode === "dark" ? "light" : "dark";
-  } else if (root.dataset) {
-    delete root.dataset.theme;
+  let theme = themeMode;
+  if (theme === "auto") {
+    try {
+      const isDark = bridge?.getContext?.()?.isDark;
+      if (typeof isDark === "boolean") theme = isDark ? "dark" : "light";
+    } catch { /* 宿主上下文尚未就绪。 */ }
   }
+  if (theme === "auto") delete root.dataset.theme;
+  else root.dataset.theme = theme;
   const labels = {auto: "主题：自动", light: "主题：浅色", dark: "主题：深色"};
-  const btn = $("theme-toggle");
-  if (btn) btn.textContent = labels[themeMode];
+  $("theme-toggle").textContent = labels[themeMode];
 }
 
 function cycleTheme() {
-  themeMode = themeMode === "auto" ? nextManualTheme : "auto";
+  themeMode = {auto: "light", light: "dark", dark: "auto"}[themeMode];
+  try { window.localStorage.setItem(themeKey, themeMode); } catch { /* 沙箱可禁用存储。 */ }
   applyTheme();
 }
 
@@ -93,19 +112,93 @@ function badge(id, text, kind = "") {
   el.dataset.state = kind;
 }
 
-function showError(message = "") {
-  $("error").textContent = message;
-  $("error").hidden = !message;
+function showError(message = "", source = "action") {
+  bannerErrors[source] = message;
+  const visible = bannerErrors.action || bannerErrors.poll;
+  $("error").textContent = visible;
+  $("error").hidden = !visible;
 }
 
-async function copy(input) {
-  input.focus(); input.select();
+function toast(message, kind) {
+  clearTimeout(toastTimer);
+  const status = $("copy-status");
+  status.dataset.state = kind;
+  status.textContent = message;
+  toastTimer = setTimeout(() => { status.textContent = ""; }, 3000);
+}
+
+function showCopyFeedback(button, copied) {
+  const previous = buttonFeedback.get(button);
+  const label = previous?.label ?? button.textContent;
+  clearTimeout(previous?.timer);
+  button.textContent = copied ? "已复制 ✓" : "请手动复制";
+  const timer = setTimeout(() => {
+    button.textContent = label;
+    buttonFeedback.delete(button);
+  }, 2000);
+  buttonFeedback.set(button, {label, timer});
+  toast(copied ? "已复制" : "已选中，请按 Ctrl+C / ⌘C 复制", copied ? "ok" : "warn");
+}
+
+async function copy(input, button) {
+  const text = input.value;
+  if (!text) return;
+  const attempt = ++copyAttempt;
+  let clipboardWrite;
   try {
-    await navigator.clipboard.writeText(input.value);
-    $("copy-status").textContent = "已复制";
+    if (navigator.clipboard?.writeText) {
+      clipboardWrite = Promise.resolve(navigator.clipboard.writeText(text)).then(() => true, () => false);
+    }
+  } catch { /* 访问或调用 Clipboard API 时也可能同步抛错。 */ }
+
+  // 等待 Clipboard Promise 会错过用户手势，须在本次点击中完成同步兜底。
+  const field = document.createElement("textarea");
+  let copied = false;
+  try {
+    field.value = text;
+    field.readOnly = true;
+    field.className = "copy-buffer";
+    document.body.appendChild(field);
+    field.focus({preventScroll: true});
+    field.select();
+    copied = document.execCommand("copy");
   } catch {
-    $("copy-status").textContent = "已选中，请按 Ctrl+C / ⌘C 复制";
+    // 浏览器或宿主策略可能禁用同步复制。
+  } finally {
+    field.remove();
+    button.focus({preventScroll: true});
   }
+
+  if (!copied && clipboardWrite) copied = await clipboardWrite;
+  if (disposed || attempt !== copyAttempt || input.value !== text) return;
+  if (!copied) {
+    input.focus();
+    input.select();
+  }
+  showCopyFeedback(button, copied);
+}
+
+function openAuthorization() {
+  const url = $("auth-url").value;
+  if (!url) return;
+  try {
+    if (window.open(url, "_blank", "noopener")) return;
+  } catch { /* 沙箱可能抛错，也可能返回 null。 */ }
+  toast("浏览器拦截了新窗口，请用复制链接", "warn");
+}
+
+function setInputValue(id, value) {
+  const input = $(id);
+  const text = value ?? "";
+  if (input.value !== text) input.value = text;
+}
+
+function renderList(id, rows, createRow) {
+  const list = $(id);
+  const signature = JSON.stringify(rows);
+  if (listSignatures.get(list) === signature) return;
+  list.replaceChildren(...rows.map(createRow));
+  listSignatures.set(list, signature);
 }
 
 function el(tag, className, text) {
@@ -153,6 +246,15 @@ function monitorAgo(value) {
   return `${Math.floor(seconds / 3600)} 小时前`;
 }
 
+function relativeTimeLabel(node, timestamp, prefix = "", suffix = "") {
+  relativeTimeLabels.set(node, () => prefix + monitorAgo(timestamp) + suffix);
+  return node;
+}
+
+function formatBytes(value) {
+  return Number.isFinite(value) ? `${monitorCount(value)}B` : "未知";
+}
+
 function formatDuration(ms) {
   if (!Number.isFinite(ms)) return "未知";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -171,7 +273,7 @@ function overviewMetric(label, scope, value, sub, valueTone = "") {
   dt.append(el("span", "", label), el("span", "scope-pill", scope));
   const dd = el("dd", valueTone ? `tone-${valueTone}` : "", value);
   item.append(dt, dd);
-  if (sub) item.append(el("p", "monitor-metric-sub", sub));
+  if (sub) dd.append(typeof sub === "string" ? el("span", "monitor-metric-sub", sub) : sub);
   return item;
 }
 
@@ -320,7 +422,8 @@ function renderLatencyChart(recent) {
     const color = turn.status === "ok" ? "var(--chart-input)" : "var(--error)";
     const rect = svgNode("rect", {x, y, width: bw.toFixed(1), height: barH, rx: 2, fill: color});
     const statusText = turnStatusLabels[turn.status] || "未知";
-    rect.append(svgNode("title", {}, `${formatDuration(turn.elapsed_ms)} · ${statusText}${turn.error_code ? ` (${turn.error_code})` : ""} · ${monitorAgo(turn.recorded_at)}`));
+    const prefix = `${formatDuration(turn.elapsed_ms)} · ${statusText}${turn.error_code ? ` (${turn.error_code})` : ""} · `;
+    rect.append(relativeTimeLabel(svgNode("title"), turn.recorded_at, prefix));
     svg.append(rect);
   });
   block.append(svg);
@@ -331,10 +434,9 @@ function renderLatencyChart(recent) {
   return block;
 }
 
-function renderMonitor(data) {
-  if (data.schema_version !== 1 || !Array.isArray(data.instances)) throw new Error("monitor schema");
-  const cards = data.instances.map(row => {
-    const idKey = row.provider_id || "unknown";
+function buildMonitorCards(instances) {
+  return instances.map((row, index) => {
+    const idKey = `${row.provider_id || "unknown"}#${index}`;
     const card = el("article", "monitor-instance");
 
     const head = el("div", "monitor-instance-head");
@@ -370,7 +472,7 @@ function renderMonitor(data) {
       );
       scopeBar.append(scopePills);
       if (recent.length) {
-        scopeBar.append(el("span", "", `最近一轮 ${monitorAgo(recent[0].recorded_at)}`));
+        scopeBar.append(relativeTimeLabel(el("span"), recent[0].recorded_at, "最近一轮 "));
       }
       overview.append(scopeBar);
 
@@ -383,7 +485,7 @@ function renderMonitor(data) {
         ? (faults[0].error_code ? formatFaultBrief(faults[0].error_code) : "请求异常")
         : recent.length ? "近期无异常" : "暂无记录";
       const latestFaultSub = faults.length
-        ? `${monitorAgo(faults[0].recorded_at)}${faults.length > 1 ? ` · 共 ${faults.length} 次` : ""}`
+        ? relativeTimeLabel(el("span", "monitor-metric-sub"), faults[0].recorded_at, "", faults.length > 1 ? ` · 共 ${faults.length} 次` : "")
         : "";
 
       grid.append(
@@ -484,7 +586,8 @@ function renderMonitor(data) {
           const statusLabel = turnStatusLabels[turn.status] || "未知";
           const statusClass = turn.status === "ok" ? "tone-ok" : "tone-error";
           const left = el("span", statusClass, `${statusLabel}${turn.error_code ? ` · ${turn.error_code}` : ""}`);
-          const right = el("span", "small", `${turn.reused ? "复用" : "新建"} · ${formatDuration(turn.elapsed_ms)} · ${monitorAgo(turn.recorded_at)}`);
+          const timing = `${turn.reused ? "复用" : "新建"} · ${formatDuration(turn.elapsed_ms)} · `;
+          const right = relativeTimeLabel(el("span", "small"), turn.recorded_at, timing);
           top.append(left, right);
 
           const meta = el("div", "turn-row-meta");
@@ -539,7 +642,7 @@ function renderMonitor(data) {
         const c = turn.content_429_candidate;
         const item = el("li", "");
         item.append(
-          el("code", "", `${turn.error_code || "429"} · hash=${c.system_hash8 || "未知"} · sys=${monitorCount(c.system_bytes)}B · attempt=${c.attempt ?? "未知"} · output=${c.has_output ? "是" : "否"}`),
+          el("code", "", `${turn.error_code || "429"} · hash=${c.system_hash8 || "未知"} · sys=${formatBytes(c.system_bytes)} · attempt=${c.attempt ?? "未知"} · output=${c.has_output ? "是" : "否"}`),
           el("span", "small", monitorTime(turn.recorded_at)),
         );
         list.append(item);
@@ -560,7 +663,7 @@ function renderMonitor(data) {
         const item = el("li", "");
         const reasonsText = Array.isArray(turn.rebuild_reasons) && turn.rebuild_reasons.length ? turn.rebuild_reasons.join(",") : "none";
         item.append(
-          el("code", "", `${turn.status}${turn.error_code ? `/${turn.error_code}` : ""} · ${formatDuration(turn.elapsed_ms)} · prompt=${monitorCount(turn.prompt_bytes)}B replay=${monitorCount(turn.replay_bytes)}B omit=${monitorCount(turn.omitted_messages)} · reasons=${reasonsText}`),
+          el("code", "", `${turn.status}${turn.error_code ? `/${turn.error_code}` : ""} · ${formatDuration(turn.elapsed_ms)} · prompt=${formatBytes(turn.prompt_bytes)} replay=${formatBytes(turn.replay_bytes)} omit=${monitorCount(turn.omitted_messages)} · reasons=${reasonsText}`),
           el("span", "small", monitorTime(turn.recorded_at)),
         );
         list.append(item);
@@ -589,26 +692,44 @@ function renderMonitor(data) {
 
     return card;
   });
+}
 
-  $("monitor-instances").replaceChildren(...cards);
+function updateMonitorCards(instances) {
+  // sampled_at 只影响快照时间，不参与卡片签名。
+  const signature = JSON.stringify([instances, reportDiagSignature]);
+  if (signature !== monitorSignature) {
+    relativeTimeLabels.clear();
+    $("monitor-instances").replaceChildren(...buildMonitorCards(instances));
+    monitorSignature = signature;
+  }
+  for (const [node, format] of relativeTimeLabels) {
+    const text = format();
+    if (node.textContent !== text) node.textContent = text;
+  }
+}
+
+function renderMonitor(data) {
+  if (data?.schema_version !== 1 || !Array.isArray(data.instances)) throw new Error("monitor schema");
+  updateMonitorCards(data.instances);
   $("monitor").dataset.stale = "false";
-  badge("monitor-badge", "本地快照", cards.length ? "ready" : "");
-  $("monitor-message").textContent = cards.length ? "" : "尚未配置 AGY 实例，请在下方完成模型配置。";
+  badge("monitor-badge", "本地快照", data.instances.length ? "ready" : "");
+  $("monitor-message").textContent = data.instances.length ? "" : "尚未配置 AGY 实例，请在下方完成模型配置。";
   $("monitor-updated").textContent = `快照 ${monitorShortTime(data.sampled_at)} · 10s 自动刷新`;
   monitorSnapshot = data;
 }
 
 async function refreshMonitor() {
   clearTimeout(monitorTimer);
-  if (disposed || document.hidden || monitorPending || !monitorReady) return;
+  if (disposed || suspended || document.hidden || monitorPending || !monitorReady) return;
+  const epoch = refreshEpoch;
   monitorPending = true;
   $("monitor-refresh").disabled = true;
   $("monitor-refresh").textContent = "刷新中…";
   try {
     const data = await bridge.apiGet("monitor/status");
-    if (!disposed) renderMonitor(data);
+    if (!disposed && epoch === refreshEpoch) renderMonitor(data);
   } catch (error) {
-    if (disposed) return;
+    if (disposed || epoch !== refreshEpoch) return;
     const status = error?.status || error?.statusCode || error?.status_code;
     const denied = status === 401 || status === 403 || /登录|权限|管理员|unauthorized|forbidden/i.test(error?.message || "");
     $("monitor").dataset.stale = "true";
@@ -619,10 +740,12 @@ async function refreshMonitor() {
     if (denied) {
       $("monitor-instances").replaceChildren();
       monitorSnapshot = undefined;
+      monitorSignature = undefined;
+      relativeTimeLabels.clear();
     }
   } finally {
-    monitorPending = false;
-    if (!disposed) {
+    if (!disposed && epoch === refreshEpoch) {
+      monitorPending = false;
       $("monitor-refresh").disabled = false;
       $("monitor-refresh").textContent = "刷新";
       if (!document.hidden) monitorTimer = setTimeout(refreshMonitor, 10000);
@@ -631,8 +754,10 @@ async function refreshMonitor() {
 }
 
 function render(data) {
+  if (!data || disposed) return;
   state = data;
-  const r = data.report, login = data.login;
+  const r = data.report ?? {}, login = data.login ?? {}, environment = data.environment ?? {};
+  const configured = Array.isArray(data.providers) ? data.providers : [];
   const busy = pending || data.busy || activeLogin(login);
   const passed = r.status === "passed";
   if (Array.isArray(r.models)) cachedModels = r.models;
@@ -640,36 +765,35 @@ function render(data) {
   const models = cachedModels;
 
   $("connection").textContent = busy ? "正在同步…" : "已连接 AstrBot";
-  $("environment").textContent = `${data.environment.system} · Python ${data.environment.python}${data.environment.container ? " · 容器环境" : ""}`;
-  $("discovery-hint").textContent = data.environment.discovery_hint || "";
-  $("install-hint").textContent = data.environment.install_hint;
-  $("install-url").value = data.environment.install_url;
-  $("install-command").value = data.environment.install_command;
+  $("environment").textContent = `${environment.system || "未知系统"} · Python ${environment.python || "未知"}${environment.container ? " · 容器环境" : ""}`;
+  $("discovery-hint").textContent = environment.discovery_hint || "";
+  $("install-hint").textContent = environment.install_hint || "";
+  setInputValue("install-url", environment.install_url);
+  setInputValue("install-command", environment.install_command);
 
-  // 默认仅展示 CLI 版本、可用模型数量，以及失败时的退出码与阶段
-  $("facts").replaceChildren(...[
+  renderList("facts", [
     r.cli_version ? `CLI ${r.cli_version}` : null,
     r.model_count != null ? `${r.model_count} 个可用模型` : null,
     Number.isInteger(r.exit_code) ? `CLI 退出码：${r.exit_code}` : null,
     r.error_code && stages[r.stage] ? `失败阶段：${stages[r.stage]}` : null,
-  ].filter(Boolean).map(text => el("span", "fact", text)));
+  ].filter(Boolean), text => el("span", "fact", text));
 
   // 高级诊断明细移入 env-diag-list
   const caps = r.advertised_capabilities;
   const capSummary = caps
     ? `MCP(http=${Boolean(caps.mcpCapabilities?.http)}, sse=${Boolean(caps.mcpCapabilities?.sse)}) · 模态(img=${Boolean(caps.promptCapabilities?.image)}, audio=${Boolean(caps.promptCapabilities?.audio)})`
     : null;
-  $("env-diag-list").replaceChildren(...[
-    r.customizations_mode ? kvItem("组件模式", r.customizations_mode) : null,
-    r.cli_flags ? kvItem("精简参数", `${r.cli_flags.include_default_customizations ? "支持" : "未探测到"} · 禁用遥测=${r.cli_flags.disable_telemetry ? "支持" : "不支持"}`) : null,
-    r.minimal_tools_status ? kvItem("精简状态", minimalToolsLabels[r.minimal_tools_status] || r.minimal_tools_status) : null,
-    r.tool_bridge_transport ? kvItem("工具桥 / Socket", transportLabels[r.tool_bridge_transport] || "未知") : null,
-    r.process_supervision ? kvItem("进程托管", supervisionLabels[r.process_supervision] || "未知") : null,
-    r.proxy_mode ? kvItem("代理配置", `${r.proxy_mode}${data.environment.proxy_mode_note ? `（${data.environment.proxy_mode_note}）` : ""}`) : null,
-    r.cli_update_status ? kvItem("CLI 更新策略", "手动管理，不检查或覆盖全局 CLI") : null,
-    r.auth_bridge !== undefined ? kvItem("认证桥接", r.auth_bridge ? "开启" : "关闭") : null,
-    capSummary ? kvItem("ACP 能力声明", capSummary) : null,
-  ].filter(Boolean));
+  renderList("env-diag-list", [
+    r.customizations_mode ? ["组件模式", r.customizations_mode] : null,
+    r.cli_flags ? ["精简参数", `${r.cli_flags.include_default_customizations ? "支持" : "未探测到"} · 禁用遥测=${r.cli_flags.disable_telemetry ? "支持" : "不支持"}`] : null,
+    r.minimal_tools_status ? ["精简状态", minimalToolsLabels[r.minimal_tools_status] || r.minimal_tools_status] : null,
+    r.tool_bridge_transport ? ["工具桥 / Socket", transportLabels[r.tool_bridge_transport] || "未知"] : null,
+    r.process_supervision ? ["进程托管", supervisionLabels[r.process_supervision] || "未知"] : null,
+    r.proxy_mode ? ["代理配置", `${r.proxy_mode}${environment.proxy_mode_note ? `（${environment.proxy_mode_note}）` : ""}`] : null,
+    r.cli_update_status ? ["CLI 更新策略", "手动管理，不检查或覆盖全局 CLI"] : null,
+    r.auth_bridge !== undefined ? ["认证桥接", r.auth_bridge ? "开启" : "关闭"] : null,
+    capSummary ? ["ACP 能力声明", capSummary] : null,
+  ].filter(Boolean), ([label, value]) => kvItem(label, value));
 
   const errorLabels = {NOT_INSTALLED: "未找到 CLI", COMMAND_NOT_FOUND: "配置路径无效", STARTUP_EXIT: "握手前退出", CLI_WRAPPER: "启动脚本不兼容"};
   badge("check-badge", data.busy ? stages[r.stage] || "正在检测" : passed ? "环境就绪" : errorLabels[r.error_code] || r.error_code || "等待检测", passed ? "ready" : r.error_code ? "error" : "");
@@ -680,7 +804,10 @@ function render(data) {
       : data.hint;
   $("check").textContent = data.busy ? "检测中…" : "重新检测";
   $("check").disabled = busy;
-  if (["NOT_INSTALLED", "COMMAND_NOT_FOUND", "STARTUP_EXIT", "CLI_WRAPPER"].includes(r.error_code)) $("install-details").open = true;
+  if (r.error_code !== previousInstallError && Object.hasOwn(errorLabels, r.error_code)) {
+    $("install-details").open = true;
+  }
+  previousInstallError = r.error_code;
 
   badge("login-badge", passed ? "已连接" : loginStates[login.state] || "等待登录", passed ? "ready" : login.state === "failed" ? "error" : "");
   $("login").disabled = busy || !r.cli_version;
@@ -689,19 +816,21 @@ function render(data) {
   $("cancel-login").disabled = pending;
   $("login-hint").textContent = activeLogin(login)
     ? `${login.owned ? "请在浏览器完成授权" : "另一位管理员正在登录"}（剩余 ${login.expires_in}s）`
+    : login.error_code ? `${actionErrorLabel(login.error_code)}，请重试或使用终端登录。`
     : passed ? ""
-    : login.state === "failed" ? `登录未完成（${login.error_code}），请重试或使用终端登录。`
+    : login.state === "failed" ? "登录未完成，请重试或使用终端登录。"
     : "请启动官方登录并在浏览器完成授权。";
   $("authorization").hidden = !login.url || !login.owned;
-  $("auth-url").value = login.url || "";
+  setInputValue("auth-url", login.owned ? login.url || "" : "");
   if (login.state !== "waiting") $("auth-code").value = "";
   $("submit-code").disabled = pending || login.state !== "waiting";
 
-  const signature = JSON.stringify(models);
+  const modelPrompt = models.length ? "请选择模型" : passed ? "环境已就绪，但未读取到模型目录" : "先完成环境检测";
+  const signature = JSON.stringify([models, modelPrompt]);
   if (modelSignature !== signature) {
     const previous = $("model").value;
-    $("model").replaceChildren(new Option(models.length ? "请选择模型" : "先完成环境检测", ""), ...models.map(m => new Option(m.name, m.id)));
-    const preferred = [previous, r.selected_model, data.providers[0]?.model].find(id => models.some(m => m.id === id));
+    $("model").replaceChildren(new Option(modelPrompt, ""), ...models.map(m => new Option(m.name, m.id)));
+    const preferred = [previous, r.selected_model, configured[0]?.model].find(id => models.some(m => m.id === id));
     if (preferred) $("model").value = preferred;
     modelSignature = signature;
   }
@@ -710,7 +839,7 @@ function render(data) {
   const effortKey = JSON.stringify([selected, efforts, data.global_effort]);
   if (effortSignature !== effortKey && (!busy || r.selected_model === selected)) {
     const previous = $("effort").value;
-    $("effort").replaceChildren(new Option(`跟随全局（${data.global_effort}）`, "default"), ...efforts.map(e => new Option({low: "低", medium: "中", high: "高"}[e], e)));
+    $("effort").replaceChildren(new Option(`跟随全局（${data.global_effort || "默认"}）`, "default"), ...efforts.map(e => new Option({low: "低", medium: "中", high: "高"}[e], e)));
     if (["default", ...efforts].includes(previous)) $("effort").value = previous;
     effortSignature = effortKey;
   }
@@ -720,9 +849,11 @@ function render(data) {
   $("tools-mode").disabled = busy || !passed || !selected;
   $("apply").disabled = busy || !passed || !selected;
   $("use-default").disabled = busy;
-  badge("model-badge", models.length ? `${models.length} 个模型` : "等待登录", passed ? "ready" : "");
+  badge("model-badge", models.length ? `${models.length} 个模型` : modelPrompt, passed && models.length ? "ready" : "");
 
-  const configured = data.providers;
+  const nextResult = JSON.stringify(data.result ?? null);
+  if (data.result && nextResult !== resultSignature) $("use-default").checked = false;
+  resultSignature = nextResult;
   badge("finish-badge", data.result ? "已保存" : configured.length ? "已配置" : "等待配置", configured.length ? "ready" : "");
   $("finish-hint").textContent = data.result?.default_selected
     ? "已同步设为全局默认模型。"
@@ -745,35 +876,47 @@ function render(data) {
       input.setAttribute("aria-label", "切换模型命令");
       const button = el("button", "btn btn-sm", "复制命令");
       button.type = "button";
-      button.addEventListener("click", () => copy(input));
+      button.addEventListener("click", () => copy(input, button));
       line.append(input, button);
       wrapper.append(pHead, line);
       return wrapper;
     }));
     providerSignature = providerKey;
   }
-  if (data.action_error) showError(`${data.action_error}：${data.action_hint}`);
+  if (data.action_error) {
+    showError([actionErrorLabel(data.action_error), data.action_hint].filter(Boolean).join("："));
+  }
   const nextDiagSig = JSON.stringify([r.status, r.stage, r.cli_version, r.process_supervision, r.tool_bridge_transport]);
-  if (monitorSnapshot && nextDiagSig !== reportDiagSignature) {
+  if (nextDiagSig !== reportDiagSignature) {
     reportDiagSignature = nextDiagSig;
-    renderMonitor(monitorSnapshot);
-  } else {
-    reportDiagSignature = nextDiagSig;
+    if (monitorSnapshot) updateMonitorCards(monitorSnapshot.instances);
   }
 }
 
 async function action(name, body = {}) {
-  if (!state || pending) return;
+  if (disposed || !state || pending) return;
   revision++;
-  pending = true; showError(); render(state);
+  pending = true;
+  render(state);
+  showError();
   try {
     const data = await bridge.apiPost(`setup/${name}`, {...body, csrf: state.csrf});
-    pending = false; render(data);
+    if (disposed) return;
+    pending = false;
+    render(data);
   } catch (error) {
-    pending = false; render(state); showError(error.message || "请求失败，请刷新页面。");
+    if (disposed) return;
+    pending = false;
+    if (state) render(state);
+    showError(error?.message || "请求失败，请刷新页面。");
   }
 }
 
+try {
+  const saved = window.localStorage.getItem(themeKey);
+  if (saved === "dark" || saved === "light") themeMode = saved;
+} catch { /* 无存储时在本页保留选择。 */ }
+applyTheme();
 wireHelpPopover("monitor-help-btn", "monitor-help");
 wireHelpPopover("model-help-btn", "model-help");
 $("theme-toggle").onclick = cycleTheme;
@@ -781,9 +924,10 @@ $("monitor-refresh").onclick = refreshMonitor;
 $("check").onclick = () => action("check");
 $("login").onclick = () => action("login");
 $("cancel-login").onclick = () => action("login-cancel", {ticket: state.login.ticket});
-$("copy-auth").onclick = () => copy($("auth-url"));
-$("copy-install").onclick = () => copy($("install-url"));
-$("copy-command").onclick = () => copy($("install-command"));
+$("copy-auth").onclick = () => copy($("auth-url"), $("copy-auth"));
+$("copy-install").onclick = () => copy($("install-url"), $("copy-install"));
+$("copy-command").onclick = () => copy($("install-command"), $("copy-command"));
+$("open-auth").onclick = openAuthorization;
 $("code-form").onsubmit = async event => {
   event.preventDefault();
   const code = $("auth-code").value; $("auth-code").value = "";
@@ -805,24 +949,53 @@ $("model-form").onsubmit = event => {
 };
 
 async function poll() {
-  if (disposed) return;
+  clearTimeout(timer);
+  if (disposed || suspended || document.hidden || pollPending || !monitorReady) return;
+  const epoch = refreshEpoch;
+  const currentRevision = revision;
+  pollPending = true;
   try {
     if (!pending) {
-      const currentRevision = revision;
       const data = await bridge.apiGet("setup/status");
-      if (!pending && !disposed && currentRevision === revision) render(data);
+      if (!disposed && epoch === refreshEpoch && currentRevision === revision) {
+        render(data);
+        pollFailures = 0;
+        showError("", "poll");
+      }
     }
   } catch (error) {
-    $("connection").textContent = "连接中断，请刷新页面";
-    showError(error.message || "无法读取状态。");
+    if (!disposed && epoch === refreshEpoch && currentRevision === revision) {
+      pollFailures = Math.min(pollFailures + 1, 4);
+      $("connection").textContent = "连接中断，正在重试…";
+      showError(error?.message || "无法读取状态。", "poll");
+    }
   } finally {
-    if (!disposed) timer = setTimeout(poll, state?.busy || (state && activeLogin(state.login)) ? 1200 : 5000);
+    if (!disposed && epoch === refreshEpoch) {
+      pollPending = false;
+      const delay = pollFailures ? Math.min(5000 * 2 ** (pollFailures - 1), 30000)
+        : state?.busy || activeLogin(state?.login) ? 1200 : 5000;
+      if (!document.hidden) timer = setTimeout(poll, delay);
+    }
   }
 }
 
-document.addEventListener("visibilitychange", () => {
+function pauseRefresh() {
+  ++refreshEpoch;
+  clearTimeout(timer);
   clearTimeout(monitorTimer);
-  if (!document.hidden && !disposed) refreshMonitor();
+  pollPending = false;
+  monitorPending = false;
+}
+
+function resumeRefresh() {
+  if (disposed || suspended || document.hidden || !monitorReady) return;
+  poll();
+  refreshMonitor();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) pauseRefresh();
+  else resumeRefresh();
 });
 
 if (fallbackPopovers.length) {
@@ -836,14 +1009,25 @@ if (fallbackPopovers.length) {
   });
 }
 
-window.addEventListener("pagehide", () => {
+window.addEventListener("pagehide", event => {
+  pauseRefresh();
+  if (event.persisted) {
+    suspended = true;
+    return;
+  }
   disposed = true;
-  clearTimeout(timer);
-  clearTimeout(monitorTimer);
+  relativeTimeLabels.clear();
   monitorSnapshot = undefined;
   $("auth-code").value = "";
   $("auth-url").value = "";
   state = null;
+});
+
+window.addEventListener("pageshow", event => {
+  if (event.persisted) {
+    suspended = false;
+    resumeRefresh();
+  }
 });
 
 if (!bridge) {
@@ -853,12 +1037,17 @@ if (!bridge) {
 } else {
   try {
     await bridge.ready();
-    monitorReady = true;
-    refreshMonitor();
-    await poll();
+    if (!disposed) {
+      monitorReady = true;
+      applyTheme();
+      refreshMonitor();
+      await poll();
+    }
   } catch (error) {
-    showError(error.message || "面板连接失败。");
-    badge("monitor-badge", "不可用", "error");
-    $("monitor-message").textContent = "面板连接失败，请刷新页面。";
+    if (!disposed) {
+      showError(error?.message || "面板连接失败。");
+      badge("monitor-badge", "不可用", "error");
+      $("monitor-message").textContent = "面板连接失败，请刷新页面。";
+    }
   }
 }

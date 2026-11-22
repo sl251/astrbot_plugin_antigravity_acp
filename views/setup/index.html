@@ -119,6 +119,7 @@
             <div class="copy-row">
               <input id="auth-url" readonly autocomplete="off" spellcheck="false">
               <button id="copy-auth" class="btn btn-sm" type="button">复制链接</button>
+              <button id="open-auth" class="btn btn-sm" type="button">在新标签打开</button>
             </div>
             <form id="code-form" autocomplete="off">
               <label for="auth-code">2. 粘贴授权码</label>
@@ -153,7 +154,7 @@
               </ul>
             </div>
           </div>
-          <span id="model-badge" class="badge">等待登录</span>
+          <span id="model-badge" class="badge">先完成环境检测</span>
         </div>
         <div class="card-body">
           <form id="model-form">
@@ -204,7 +205,7 @@
 
     <footer class="footer">
       <span>AGY ACP · 本地直连</span>
-      <span id="copy-status" class="copy-toast" role="status"></span>
+      <span id="copy-status" class="copy-toast" role="status" aria-atomic="true"></span>
     </footer>
   </main>
   <script type="module" src="./app.js"></script>
