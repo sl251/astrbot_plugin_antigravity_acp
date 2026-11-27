@@ -1,6 +1,6 @@
 # 兼容补丁登记与退役条件
 
-> 插件版本和宿主范围见 [metadata.yaml](../metadata.yaml)。4.30 仅作为已知文案样本。退役前固定宿主、CLI、模型、复现和基线 SHA，按[测试规范](testing.md)核验。
+> 插件版本和宿主范围见 [metadata.yaml](../metadata.yaml)。4.30 仅作为已知宿主提示文案样本，不代表兼容 4.30 的 runner/API。退役前固定宿主、CLI、模型、复现和基线 SHA，按[测试规范](testing.md)核验。
 
 ## 宿主/上游定点兼容
 
@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | #14 `system_prompt.py::filter_host_capabilities` | 仅过滤已知 AstrBot 4.29.4/4.30 的失实“本地电脑能力”独立行或可验证完整块；未知结构保留 | 宿主声明超出当前受限工具范围的本机能力；原报告曾独立复现内容相关 429 | 宿主真实提供可协商的能力合同，或目标版本不再注入该声明；与原宿主 system 做字节级差异回归，再按宿主版本逐步删除 |
 | #19 `system_prompt.py::_rewrite_safe_mode_rules` | 仅匹配完整 Safe Mode 规则列表内的第 4 条，将 `style/role-play` 等义改成 `style and role-play`，保留规则与语义 | 4.29.4 真实样本出现无明细 429，定点改写在记录的实机链路恢复 | 上游规则文本/服务策略稳定修复；以新旧真实模板和合成规则测试证明无误删、无回归，再撤销 |
-| 4.29.4 `host_compat.py` | 按本 Provider 的宿主运行拦截交付后的 fallback/retry；#45 通过 runner 步数和 signal 识别无工具收尾 | 宿主 runner 异常处理可能重复生成，甚至重复有副作用工具 | 目标 AstrBot 版本原生保证不重放；须核对该版本真实 runner 的备用 Provider 调用数，并回归正常收尾、超时恢复与拒绝旧结果 |
+| 4.29.4 `host_compat.py` | 仅拦截本 Provider 触发的交付后 fallback/retry，其他 Provider 自身的运行原样透传。#45 通过 runner 步数和 signal 识别无工具收尾 | 宿主 runner 异常处理可能重复生成，甚至重复有副作用工具 | 目标 AstrBot 版本原生保证不重放；须核对该版本真实 runner 的备用 Provider 调用数，并回归正常收尾、超时恢复与拒绝旧结果 |
 | #33 `provider.py` / `messages.py` | 仅将确认带临时标记的当前用户文本从预期回放中排除；字典缺标记时按原始附加文本顺序及位置逐项核对 | AstrBot 4.29.4 序列化消息时会丢失私有标记，但持久化时仍会丢弃对应内容 | 宿主向 Provider 保留临时标记或直接提供持久化视图，并通过临时文本、真实编辑、工具回填回归后，可移除字典匹配 |
 | #7 `notices.py` / `errors.py` | 对 CLI 的跨分片重试提示做有界识别，避免把容量告警当正文并做保守分类 | 上游错误不总有稳定结构化字段；用户曾遇到 `API error (attempt N)` 进入回答 | CLI/ACP 提供可靠的结构化错误，且真实告警/部分正文场景全部通过回归；不能仅凭单条日志删除 |
 | Windows #8/#9/#22 `paths.py` / `process.py` / `windows_job.py` | 长路径、进程树清理与 Python 3.12+ 关闭顺序兼容 | 平台和运行时差异客观存在 | 分平台证明旧路径不再需要；不能从 Ubuntu 绿灯推断 Windows 不需要 |

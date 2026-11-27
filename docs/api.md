@@ -48,7 +48,7 @@ GET `setup/status` 的 `tool_policy` 字段与 POST `setup/tool-policy` 的成�
 
 GET `monitor/quota` 仅读内存缓存并核验环境，不启动 CLI。进入监控、页面恢复或登录结束时先 GET，缺失或过期才尝试一次按需 POST。GET 失败、缺少面板就绪条件或登录忙碌时跳过自动 POST。常规监控轮询与重置倒计时不刷新额度。
 
-POST `setup/quota-refresh` 仅接受 `csrf` 与可选严格布尔值 `force`，省略或 `true` 跳过成功缓存和失败冷却。`force=false` 与 `/agy quota` 走 60 秒缓存；可观察的同一登录环境中，暂态失败冷却 60 秒，`AUTH`、`NOT_INSTALLED` 或 `UNSUPPORTED` 等待手动刷新或环境变化。并发合并。`QuotaService` 先检查 CLI ≥ 1.5.17，再在临时工作目录运行官方 `agy -p /usage --output-format json`，含版本检查总超时 30 秒。只接受 `usage` 命令结果，存在 `num_turns` 时必须为整数 0。继承服务用户的认证环境，代理按 CLI 配置，仅读认证文件元数据。
+POST `setup/quota-refresh` 仅接受 `csrf` 与可选严格布尔值 `force`，省略或 `true` 跳过成功缓存和失败冷却。`force=false` 与 `/agy quota` 走 60 秒缓存；可观察的同一登录环境中，暂态失败冷却 60 秒，`AUTH`、`NOT_INSTALLED` 或 `UNSUPPORTED` 等待手动刷新或环境变化。并发合并。`QuotaService` 先检查 CLI ≥ 1.5.17，再在临时工作目录运行官方 `agy -p /usage --output-format json`，含版本检查总超时 30 秒。只接受 `usage` 命令结果，存在 `num_turns` 时必须为整数 0。子进程继承服务用户的认证环境，插件仅读认证文件元数据。代理由插件 `proxy_mode` 决定，`custom` 注入 `proxy_url`，`direct` 清除 HTTP/HTTPS/ALL 代理变量（含大小写），`inherit` 继承原环境。
 
 快照为 schema v1，`source="official_cli"`。`fetched_at` 是实际 UTC 采样时间，初始为 `null`，`groups=[]`、`error=null`。`groups[]` 含 `name`、`models_shared` 和 `buckets`，每个 bucket 有 `id`、`name`、`window`、`remaining_fraction`（0–1）、`reset_time`（UTC 或 `null`）。同组共享额度，不推算绝对额度。`capability` 为 `unknown/supported/unsupported`，`cli_version` 可为 `null`。
 

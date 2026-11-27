@@ -2,9 +2,9 @@
 
 ## 0.8.6（2026-11-27）
 
-- **工具执行超时后的迟到结果重建（#45 / [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)）**：宿主工具执行超过 `tool_execution_timeout` 后，若 CLI 会话仍活且宿主未取消，插件保留会话作为超时交接证据。宿主晚带回闭合的工具结果时，校验同一宿主运行、未过 `idle_ttl`、会话存活、模型与上下文一致、历史前缀与原工具调用完全匹配、结果未提交过；全部通过则把真实结果按文本历史送入一次无工具生成。已识别的超时回填失效或失配时返回 `TOOL_TIMEOUT`（禁止重试与 fallback），没有超时证据的旧回填返回 `TOOL_STALE`。
+- **工具执行超时后的迟到结果重建（#45 / [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)）**：宿主工具执行超过 `tool_execution_timeout` 后，插件不再关闭 ACP 会话，而是在会话上记一份超时交接。宿主晚带回闭合的工具结果时，校验同一宿主运行、未过 `idle_ttl`、会话存活、模型与上下文一致、历史前缀与原工具调用完全匹配、结果未提交过；全部通过则把真实结果按文本历史送入一次无工具生成。任一条件不满足时返回 `TOOL_TIMEOUT`（禁止重试与 fallback），不再误报「进程重载」；真正的进程重载或过期回填仍返回 `TOOL_STALE`。
 - **步数用尽后的收尾请求不再 `TOOL_CONTEXT`**：AstrBot 4.29.4 跑满 `max_steps` 后拔掉工具集再请求一次，带 `role=tool` 尾巴的请求续接带工具的旧 prompt 会抛 `TOOL_CONTEXT`。现在收尾请求以已闭合的文本历史重建、不带工具；跨运行、改写或重复的回填仍被拒绝。
-- **验证与限制**：PR #46 的 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042) 四组通过。PR 另记载使用 AstrBot 4.29.4 原版 `tool_loop_agent_runner.py` 的离线回归。2026-11-27 的发行记录记载 Linux Docker / AstrBot 4.29.4 部署与一轮 webchat 验证，未复现长工具场景。维护者确认已在线上验证 PR #46，原 PR 验收尚未同步；已确认和缺失的证据见[计划状态](docs/plan-status.md#近期已实现及证据范围)。原故障中 fallback 日志与实际行为的差异仍未查明。
+- **验证与限制**：PR #46 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042) 四组 Ubuntu/Windows × Python 3.11/3.12 回归通过；本地另用 AstrBot 4.29.4 的 `tool_loop_agent_runner.py` 原文跑同一套 372 项通过，两组新回归走宿主真实代码。2026-11-27 已在一台 Linux Docker / AstrBot 4.29.4 实机部署并完成 webchat 一轮验证。线上触发该问题的长工具场景未在实机复现；当时「插件记录为不允许 fallback、宿主仍切到 fallback」的差异尚未查明。排障见 [troubleshooting](docs/troubleshooting.md)。
 
 ## 0.8.5（2026-11-26）
 
@@ -31,21 +31,21 @@
 - 修复 AstrBot 在持久化历史时移除临时用户文本，导致后续轮次误报 `history_rewrite` 并重建 ACP 会话的问题。可确认的临时文本仍发给模型，预期回放按宿主实际保存的内容计算。真实用户编辑仍触发重建。[#33](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/33) · [PR #35](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/35)
 - 离线回归覆盖严格及结构化模式、思考块回放、真实历史编辑和工具回填。PR 的 Ubuntu 与 Windows 矩阵已通过，真实 AGY 与生产效果待验证。[CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45433687834)
 
-## 0.8.1（2026-11-24）
+## 0.8.1（2026-11-24；实机验收待 #31）
 
 - 前端选用 [feat/ui-redesign](https://github.com/sl251/astrbot_plugin_antigravity_acp/tree/feat/ui-redesign) 的最终可视化设计：环形占比、会话池分段条、上下文进度、Token 构成与耗时柱图、四步进度、连接状态、响应式布局和宿主主题。
 - 仅替换前端，保留 v0.8.0 的 #32 后端路由、历史图片预算、输入组织、防重放和脱敏持久失败记录。适配监控 schema v2、只读路由与失败诊断；设置与保存继续使用原生 Bridge 与 nonce。高级实例操作按钮不随旧界面恢复，可使用宿主原生模型管理；后端 API 保留。
 - 恢复原生 DOM 回归，保留 HTTP/受限 iframe 剪贴板降级和后台轮询生命周期。移除 Vue 构建目录与旧产物，分发不需要 Node.js。
-- 本版由跨平台 Python 回归及原生 JS 测试门控。当时未完成的实机矩阵见[历史状态](docs/plan-status.md#关闭延期与未验证)。
+- 本版由跨平台 Python 回归及原生 JS 测试门控。实机、真实 CLI、生产与视觉验收待 #31；保留 v0.8.0 供回退。
 
-## 0.8.0（2026-11-24）
+## 0.8.0（2026-11-24；实机验收待 #31）
 
 - **原生 Dashboard 重构（#30）**：Vue 3 / Vuetify 3 / TypeScript / Vite 六模块界面，使用宿主 Plugin Views Bridge、相对资源路径及本地字体/图标；保留 #28 的复制降级与轮询边界。
 - **模型路由（#32）**：默认模型保存同时校验 runner 配置与实际解析结果，区分配置主项、解析主项和服务观测；删除/停用前检查引用，扫描不完整时阻止操作。不全局修改宿主 resolver/delete_provider，不按同名模型自动迁移 ID。
 - **上下文与图片**：当前用户输入置于历史封套外，保持当前附件顺序；历史图片使用占位及指纹，不再占用本轮真实附件预算，保留当前图验证与会话复用边界。
 - **失败与副作用**：无有效正文、无工具交接的失败保留显式 fallback 资格；可见正文、工具交接及工具续轮失败禁止自动重放。工具前后分段过滤真实 CLI 告警，新增有界脱敏持久失败诊断，与 cost log 解耦。
 - **版本与分发**：统一 metadata、运行时单点版本常量与前端 package/lock；AstrBot `>=4.29.4,<4.30`，Python 3.11+，部署使用已构建的静态资源，无需 Node.js。
-- **验证与限制**：[#34](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/34) 最新实现提交 `107bef7` 的 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45379518123) 六组全部成功（Linux/Windows 前端构建一致性检查与 Python 3.11/3.12 回归）。旧 DOM 测试因旧 app.js 移除而跳过，不等同于新版交互验收。当时未执行真实 AGY、AstrBot iframe、QQ、视觉与生产验收。关联内部 [#31](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/31) 已关闭，标记为不计划继续；#32 §5 并发争用、池锁及专用 Agent 调查延期。建议先备份配置并在非生产环境验证；可回退至 v0.7.5。
+- **验证与限制**：[#34](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/34) 最新实现提交 `107bef7` 的 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45379518123) 六组全部成功（Linux/Windows 前端构建一致性检查与 Python 3.11/3.12 回归）。旧 DOM 测试因旧 app.js 移除而跳过，不等同于新版交互验收。真实 AGY、AstrBot iframe、QQ、视觉与生产验收尚未执行（[#31](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/31)）；#32 §5 并发争用、池锁及专用 Agent 调查延期。建议先备份配置并在非生产环境验证；可回退至 v0.7.5。
 
 ## 0.7.5（正式发布，2026-11-22）
 

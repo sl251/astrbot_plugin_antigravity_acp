@@ -10,7 +10,7 @@
 | [#38](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/38) / [#39](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/39) | 工具逐项权限、实验性搜索、官方额度、每日用量和管理员指令 | PR 有离线、CI 和 CLI 搜索观测；事后取消且未收到结果帧的记录不能证明联网请求未发出。QQ 完整端到端覆盖未确认。 |
 | [#41](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/41) / [#42](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/42) | 原生注册表、Linux 只读分页、无宿主 MCP 解耦 | PR 有离线、CI 及 Linux Docker / 官方 CLI 1.5.18 的无生成与无 MCP 分页冒烟。Windows/macOS 的原生读取未验证，其他 CLI 版本按当前能力门槛。写入梯队主动延期，继续拒绝。 |
 | [#43](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/43) / [#44](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/44) | 额度按需刷新，明细跨重载恢复 | PR 有离线、CI，及 Linux Docker 真实 CLI 额度、运行时重建和另启进程恢复。管理员 iframe 验收及带生产历史样本的宿主整进程重启未记录。 |
-| [#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) / [#46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46) | 执行超时后的迟到结果恢复、步数用尽的无工具收尾 | 有 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042) 和 AstrBot 4.29.4 runner 源码离线回归。维护者确认已在线上验证，原 PR 验收记录尚未同步。现有 [发行记录](../CHANGELOG.md#0862026-11-27) 有一次 webchat 记录；长工具现场、两路完整覆盖及更详细的验收记录未确认。原故障中日志显示 fallback 被禁止、宿主却切换的差异原因仍未知。 |
+| [#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) / [#46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46) | 执行超时后的迟到结果恢复、步数用尽的无工具收尾 | [发行记录](../CHANGELOG.md#0862026-11-27) 记载 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042) 四组通过、AstrBot 4.29.4 runner 源码离线回归，以及 Linux Docker / AstrBot 4.29.4 实机部署与一轮 webchat 验证。长工具场景未在实机复现，原故障中 fallback 日志与实际切换不符的原因仍未知。 |
 
 #45 Issue 正文混合了主 runner 和子 Agent 的步数日志。原线上触发为工具交接后的执行超时，主 runner 的耗尽收尾是另一路。见[维护者的根因更正](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45#issuecomment-7199090573)。PR #40 已关闭，文档说明随后随 #42 合入。
 
@@ -27,6 +27,6 @@
 | [#30 前端](acp-30-frontend-handoff.md)、[#32 后端](acp-32-backend-handoff.md)、[离线 QA](acp-30-32-offline-qa.md) | 旧 Vue 构建、候选交接及测试证据。当前面板使用原生 `views/setup/`。 |
 | [观测面板计划](webui-observability-dashboard-plan.md)、[429 调研](429-prompt-investigation.md) | 早期方案和调查假设。 |
 | [#41 工具探针](issue41-builtin-tools-probe.md)、[PR #9 验收](pr9-acceptance.md)、[#16 验证](agent-docs-validation.md) | 固定版本、场景的真实或离线证据，核对各自环境和跳过项。 |
-| [Agent 旧施工书](agent-docs-next-release-plan.md)、[LiftGate](liftgate-hardening-plan.md)、[0.5.0 任务书](next-version-task.md)与[实现记要](impl-notes-0.5.0.md)、[更早的归档](archive/) | 保留当时的交付范围和原始记录。 |
+| [Agent 旧施工书](agent-docs-next-release-plan.md)、[LiftGate](liftgate-hardening-plan.md)、[0.5.0 任务书](next-version-task.md)与[实现记要](impl-notes-0.5.0.md)、[v0.4.0 交接](archive/HANDOFF_0.4.0.md)与[v0.4.1 测试记录](archive/TEST_REPORT_0.4.1.md) | 保留当时的交付范围和原始记录。 |
 
 任务管理和新增验收证据按[开发与交付规范](testing.md#开发流程)更新，保留历史正文。

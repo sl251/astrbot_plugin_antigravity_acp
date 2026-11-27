@@ -2,16 +2,18 @@
 
 先记录部署 SHA、插件/宿主/Python/CLI 版本、服务用户和容器内路径。管理员可执行 `/agy doctor`，保留脱敏 `stage`、`error_code`、CLI `exit_code`、是否已发 prompt、可见输出、工具交接/结果与 fallback 次数。未知字段保留未知。沿发现/启动 → 认证 → 握手/目录 → 保存 → 生成 → 工具审批/执行/回填定位阶段。输出或工具副作用之后停止自动重试，详细边界见[架构](architecture.md#会话历史与防重放)。
 
+不以重登、重装、清空目录或放开内置能力作为通用修复。
+
 ## 故障定位索引
 
 源码与测试列给出首读入口，命令见[定向回归](testing.md#定向回归)。
 
 | 症状 / 错误码 | 源码 | 测试 | 排障 |
 | --- | --- | --- | --- |
-| 找不到或启动失败 `NOT_INSTALLED` / `COMMAND_NOT_FOUND` / `PERMISSION` / `LAUNCH` / `STARTUP_EXIT` / `CLI_WRAPPER` | [process.py](../agy_provider/process.py)、[paths.py](../agy_provider/paths.py)、[windows_job.py](../agy_provider/windows_job.py) | [启动与清理](../tests/test_process_hardening.py)、[路径](../tests/test_paths.py) | [同用户检测](#无生成检测与实际服务对照) |
+| 找不到或启动失败 `NOT_INSTALLED` / `COMMAND_NOT_FOUND` / `PERMISSION` / `LAUNCH` / `STARTUP_EXIT` / `CLI_WRAPPER` | [process.py](../agy_provider/process.py)、[paths.py](../agy_provider/paths.py)、[windows_job.py](../agy_provider/windows_job.py) | [启动与清理](../tests/test_process_hardening.py)、[路径](../tests/test_paths.py)、[启动诊断](../tests/test_diagnostics.py)、[ACP 握手与包装脚本](../tests/test_acp.py) | [同用户检测](#无生成检测与实际服务对照) |
 | `AUTH` / `AUTH_BRIDGE`、登录后仍无模型 | [auth.py](../agy_provider/auth.py)、[login.py](../agy_provider/login.py)、[probe.py](../agy_provider/probe.py) | [认证](../tests/test_auth_config.py)、[登录](../tests/test_login.py)、[自检](../tests/test_diagnostics.py) | [启动与登录](#启动登录与模型设置) |
 | `MODEL` / `NO_MODELS`、默认路由异常、漂移、`REFERENCE_BLOCKED`、保存部分成功 | [onboarding.py](../agy_provider/onboarding.py)、[routing.py](../agy_provider/routing.py)、[main.py](../main.py) | [路由](../tests/test_routing.py)、[设置](../tests/test_onboarding.py)、[初始化](../tests/test_main_init.py)、[DOM](../tests/setup.test.mjs) | [模型设置](#启动登录与模型设置) |
-| `RATE_LIMIT` / `QUOTA`、重试告警出现在正文、#14/#19 | [notices.py](../agy_provider/notices.py)、[errors.py](../agy_provider/errors.py)、[failure_guard.py](../agy_provider/failure_guard.py)、[system_prompt.py](../agy_provider/system_prompt.py) | [告警](../tests/test_notices.py)、[候选](../tests/test_content_429.py)、[Safe Mode](../tests/test_safe_mode_rule.py)、[冷却](../tests/test_failure_guard.py) | [429](#rate_limit--quota-与-14) |
+| `RATE_LIMIT` / `QUOTA`、重试告警出现在正文、#14/#19 | [notices.py](../agy_provider/notices.py)、[errors.py](../agy_provider/errors.py)、[failure_guard.py](../agy_provider/failure_guard.py)、[system_prompt.py](../agy_provider/system_prompt.py) | [告警](../tests/test_notices.py)、[候选](../tests/test_content_429.py)、[宿主能力声明](../tests/test_system_prompt.py)、[Safe Mode](../tests/test_safe_mode_rule.py)、[冷却](../tests/test_failure_guard.py) | [429](#rate_limit--quota-与-14) |
 | `EMPTY` / `TOOL_PERMISSION`、合法 MCP 被取消 | [transport.py](../agy_provider/transport.py) `_permission_option`、[tool_turn.py](../agy_provider/tool_turn.py) | [一次性权限](../tests/test_mcp_permissions.py)、[拒绝归因](../tests/test_permission_attribution.py)、[工具链](../tests/test_tool_pipeline.py) | [权限及空回复](#empty权限拒绝与-12) |
 | `TOOL_ARGUMENTS` / `TOOL_SCHEMA`，合法数组被拒 | [tools.py](../agy_provider/tools.py) `ToolSnapshot` / `ToolBroker.dispatch` | [schema](../tests/test_tool_schemas.py) | [原始契约](#tool_arguments-与-13) |
 | `TOOLS_DISABLED` / `TOOL_CHOICE`、原生读取不可用或实验搜索被中止 | [builtin_tools.py](../agy_provider/builtin_tools.py)、[provider.py](../agy_provider/provider.py)、[sessions.py](../agy_provider/sessions.py) | [策略](../tests/test_issue38_permissions.py)、[只读/无 MCP](../tests/test_issue41_readonly_builtins.py)、[DOM](../tests/setup.test.mjs) | [工具检查](#工具图片与监控) |
@@ -34,11 +36,11 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 60
 
 独立 probe 继承终端代理，附加参数仅 `--data-root`。终端通过而面板失败时，对比服务的用户/HOME、command、代理与数据根。probe 退出 0 表示检查通过，2 为阻塞；报告里的 `exit_code` 来自 CLI，仍须结合握手/目录阶段。
 
-`NETWORK`、`TLS`、`TIMEOUT` 先查阶段、出口/DNS、证书、代理与时限；`PROXY_AUTH` / `PROXY` 查 407、代理协议和容器可达性。`TRANSPORT` / `PROTOCOL` 查 JSON-RPC、EOF 和实际退出码。通用 `-32000` 或 403 无法单独判断登录或封禁。错误映射见 [errors.py](../agy_provider/errors.py)。
+`NETWORK`、`TLS`、`TIMEOUT` 先查阶段、出口/DNS、证书、代理与时限；`PROXY_AUTH` / `PROXY` 查 407、代理协议和容器可达性。`TRANSPORT` / `PROTOCOL` 查 JSON-RPC、EOF 和实际退出码。显式 RPC 错误不被泛化 stderr 覆盖，只有同阶段已识别的 stderr 信号才可辅助细化通用错误。通用 `-32000` 或 403 无法单独判断登录或封禁。错误映射见 [errors.py](../agy_provider/errors.py)。
 
 ## RATE_LIMIT / QUOTA 与 #14
 
-1. 区分 RPC 错误、CLI 告警与答案内容。查看 `request_sent`、`usage_status`、`has_output`、`origin_turn_id` 和 `retry_after`。后两项可指向本地冷却或去重。只有明确耗尽信号才能支持额度归因。
+1. 区分 RPC 错误、CLI 告警与答案内容。查看 `request_sent`、`usage_status`、`has_output`、`origin_turn_id` 和 `retry_after`。后两项可指向本地冷却或去重。只有明确耗尽信号才能支持额度归因，`e.g. check quota` 等示例文案不证明余额为零。
 2. #14 查宿主本地能力声明是否属于定点过滤；#19 查 4.29.4 Safe Mode 第 4 条是否在完整规则列表内等义改写。用合成 system 验证，避免复制完整真实提示词。`content_429_candidate` 可随已有输出出现，归因仍未知。参见[定点兼容](compatibility.md)。
 3. 冷却默认 60 秒、最长 300 秒，期满允许单个 half-open 探测；EMPTY 默认去重 30 秒。确认无输出或副作用且在授权范围后，可手工进行单次同模型/档位、同环境、无工具的最小对照。保持防重放、冷却和原 system 语义。
 
@@ -46,7 +48,7 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 60
 
 按单轮追踪工具观察、ACP permission、MCP `tools/call`、宿主审批/执行、结果回填和最终正文。交接后暂时无正文是中间态。上游明确错误优先；无上游错误且本轮权限拒绝导致无正文时看 `TOOL_PERMISSION`，其余 `EMPTY` 再核对终态。计费输出 Token 无法代替正文证据。
 
-合法 MCP 被拒时核对活跃 prompt、名称/ID/状态、唯一 `allow_once` 与终态时序。已许可却无 `tools/call` 查 CLI/relay；到宿主后查原始 schema、预算、审批和回填。本轮尚无正文、工具执行及交接时，已识别的内置拒止可由 Provider 本地提示结束；只有搜索通知文案提示请求可能已发出。见[工具策略](api.md#工具策略)。
+合法 MCP 被拒时核对活跃 prompt、名称/ID/状态、唯一 `allow_once` 与终态时序。终态后、过期、重复、跨会话、未知工具及永久许可（`allow_always`）继续拒绝。已许可却无 `tools/call` 查 CLI/relay；到宿主后查原始 schema、预算、审批和回填。本轮尚无正文、工具执行及交接时，已识别的内置拒止可由 Provider 本地提示结束；只有搜索通知文案提示请求可能已发出。见[工具策略](api.md#工具策略)。
 
 ## TOOL_ARGUMENTS 与 #13
 
