@@ -1,5 +1,7 @@
 # ACP #30 / #32 独立离线 QA 与候选构建报告（精简收口版）
 
+> 历史候选构建与离线证据（#30 / #32）。源码、测试和日志路径对应当时工作区；当前验证按[测试规范](testing.md)，#31 状态见[索引](plan-status.md)。
+
 - **执行角色**：Hydrogen（`gemini-4-hydrogen-xhigh`），仅执行离线测试、类型检查与前端候选构建；未修改产品源码（`agy_provider/**`、`main.py`、业务 `frontend/src/**`、`vite.config.ts`、`package.json` 依赖版本、`LICENSES/**`、`tools/check_sensitive.py`）。
 - **任务根与工作树**：`/root/hermes-workspace/acp-30-32-2026-11-24/candidate`
 - **基线与候选提交**：

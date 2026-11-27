@@ -1,47 +1,27 @@
 # Agent 工作入口
 
-本仓库把官方 `agy acp`（stdio）接为 AstrBot 原生 `agy_acp` Provider，支持 Python **3.11+** 和 AstrBot **`>=4.29.4,<4.30`**。当前版本见 [metadata.yaml](metadata.yaml)。识别 4.30 的已知宿主提示文案，不代表兼容 4.30 的 runner/API。Hermes、Codex、AGY 从本页按任务读取资料，无需通读历史施工书。
+官方 `agy acp` 通过 stdio 接入 AstrBot `agy_acp` Provider。插件版本与宿主范围见 [metadata.yaml](metadata.yaml)，Python 3.11+。以任务基线的实际源码确定契约，测试用于核对，历史 Issue、PR 和交接报告用于追溯。
 
 ## 必须保持的边界
 
-- 模型请求只走官方 CLI；不做 HTTP 反代、指纹伪造、号池或破限。隔离 `--gemini-dir`、`--app-data-dir` 与 workspace，默认拒绝 CLI 内置能力。#38 / #41 唯一开放与受控范围见 [接口契约](docs/api.md) 与 [原生工具调查报告](docs/issue41-builtin-tools-probe.md)：Linux + CLI `1.5.17` / `1.5.18` 经版本及路径核验后可单次读取隔离工作区顶层普通 `.txt`；`search_web` 仅限实验性事后观测开关（不得宣称事前拦截）；终端、写/改文件、`browser`、`read_url`、`execute_url` 与多代理调度工具保持拒绝。
-- 认证由官方 CLI 管理。文件桥只核验元数据并创建单文件链接；不得读取、解析、复制或记录 OAuth 内容、系统凭据。授权 URL/code/ticket、代理密码、完整提示词与敏感工具参数不得进入日志、报告或聊天。
-- ACP 仅对当前活跃 prompt 中已观测、名称/ID/状态匹配的快照 MCP 或经路径及版本核验的 `read_file` 选择唯一有效 `allow_once`；不得永久授权。跨会话、过期、重复和未知工具继续拒绝。内置读取须在回包前计入共享预算；`search_web` 按通知计入同一预算，不属于 ACP `allow_once` 授权；MCP 仍由宿主审批并按原始 schema 校验、隔离执行。
-- 模型适配 schema 与宿主原始 schema 分开保存；执行按原始契约校验，两者均参与快照指纹。不得为兼容 Gemini 收窄宿主允许的数组值。
-- 已输出可见正文、交接工具或工具结果续轮后失败，保留 `no_retry` + `no_fallback`，禁止自动重放。仅思考/进度且未交接、未执行工具的失败可保留显式 fallback 资格；不得仅凭无正文推断无副作用。修改宿主兼容层须核对声明版本的真实 runner，不能只依赖异常属性。
-- system 只过滤已知失实宿主能力声明，并对结构锚定的 Safe Mode 已知单句做 #19 等义改写；保留其他人格与用户历史，不做通用删词或净化重试。`content_429_candidate` 仅为候选遥测，不能证明 Google 内容过滤、风控或额度根因。
-- 无生成自检、保存、真实生成分别验收；缺失 usage/退出码是未知，不能填成 0 或成功。监控只读，不得额外发模型请求或泄漏原始会话身份。
+- 只走官方 CLI，禁止反代、客户端伪造、号池和破限。保持每会话的 CLI 配置、数据和工作目录隔离。认证由官方 CLI 管理，文件桥只核验元数据和建立单文件链接。禁止读取、复制、记录 OAuth 内容，或在日志、报告、聊天中暴露授权材料、代理凭据、原始提示词或敏感工具数据。
+- 内置工具默认拒绝。只开放[登记的受限能力](docs/api.md#工具策略)：当前 prompt 的唯一有效 `allow_once`、Linux 验证版本及私有工作区顶层文本读取约束、实验性联网搜索的事后中止和共享预算。终端、写入、浏览器、未知工具保持拒绝。MCP 仍经宿主审批，执行校验原始 schema，模型适配不得收窄它。
+- 已输出正文、交接工具或进入工具结果续轮后失败，必须保留 `no_retry` 和 `no_fallback`。校验通过后把已完成的结果用于[一次无工具生成](docs/architecture.md#无工具收尾与超时恢复)，允许总结，禁止重复执行工具或自动重放原请求。
+- 只定点处理已知失实宿主能力声明与 Safe Mode 规则。保留其余人格和历史，禁止通用净化重试。监控只暴露脱敏统计，缺失用量填未知，只读接口不触发生成。
 
-## 工作顺序
+## 开发与交付
 
-1. 先看 issue 正文/评论、`git status --short --branch` 和实际基线；保护已有改动，必要时新建 worktree。
-2. 从下表定位源码与既有测试，先保留最小失败证据，再修改。区分事实、推断、未验证，不用放宽安全边界或删除正确断言让测试通过。
-3. 按 [测试与交付规范](docs/testing.md) 执行定向检查；行为变更再跑全量离线回归。真实 CLI/宿主验证单独记录，不把离线桩当作生产证据。
-4. 检查文档与源码一致并交付差异、测试结果、限制和回滚方式。文档任务仅改文档，不顺带改运行行为，不预设下个版本号。
+- 开工前确认基线和 `git status --short --branch`，保护已有改动。任务只改相关模块，文档专项仅改文档。若安排多 Agent 并行，使用独立分支或 worktree，并明确文件归属、接口依赖和集成顺序。
+- 使用[测试与交付规范](docs/testing.md)，分别记录离线、CI、真实 CLI、宿主和生产证据。维护者补做实机后同步验收摘要。文档专项做一致性与链接检查即可。
 
-## 按需阅读
+## 按任务阅读
 
-- 当前 UI 为 [views/setup/](views/setup/) 原生可视化实现（feat/ui-redesign）；v0.8.0 Vue 前端交接仅供历史追溯。后端 #32 见 [后端交接](docs/acp-32-backend-handoff.md)，实机待 #31。
-
-| 任务 | 首读 | 关键入口 |
-| --- | --- | --- |
-| 安装、配置与日常使用 | [README](README.md) | [配置 schema](_conf_schema.json)、[Settings](agy_provider/config.py) |
-| ACP、会话复用、工具交接、防重放 | [架构与源码导航](docs/architecture.md) | `provider.py` → `sessions.py` / `tool_turn.py` → `transport.py` |
-| 报错、启动、登录、工具、模型、监控 | [排障 SOP](docs/troubleshooting.md) | 按错误码找证据、源码及测试 |
-| #12 MCP 权限 / #13 数组 schema / #14 本地能力 429 / #19 Safe Mode 429 / #24 历史图片重复附件 | [故障定位索引](docs/architecture.md#故障定位索引) | 源码与测试按症状直达，#19 先读 [429 排障](docs/troubleshooting.md#rate_limit--quota-与-14) |
-| 最小复现、测试命令、实机验收与报告 | [测试与交付规范](docs/testing.md) | [CI 矩阵](.github/workflows/test.yml) |
-| 当前兼容补丁、退役评估 | [兼容补丁登记](docs/compatibility.md) | 宿主定点过滤、fallback 防重放、Schema/工具协议边界 |
-| 过期施工书与遗留事项 | [计划状态索引](docs/plan-status.md) | 区分已完成、历史记录与待验证项 |
-| 发布历史与既有验收证据 | [CHANGELOG](CHANGELOG.md) | 仅在追溯指定版本时读历史计划/报告 |
-
-常用全量离线命令（仓库根目录，Python 3.11+、Node.js；CI 使用 Node 22）：
-
-```sh
-python -m unittest discover -s tests -v
-node --check views/setup/app.js
-node --test tests/setup.test.mjs
-python -m compileall -q main.py agy_provider tests
-git diff --check
-```
-
-本地通过不能代替当前提交的 CI、真实 CLI、生产或独立审读；交付时分别写明。
+| 要做什么 | 首读 |
+| --- | --- |
+| 安装、配置、用户操作 | [README](README.md) |
+| 会话、工具桥、认证、存储 | [架构](docs/architecture.md) |
+| 模型管理、工具权限、额度、用量 API | [接口](docs/api.md) |
+| 从症状或错误码定位源码、测试和操作 | [排障索引](docs/troubleshooting.md#故障定位索引) |
+| 找测试命令或验收口径 | [测试与交付](docs/testing.md) |
+| 调整宿主兼容补丁 | [兼容登记](docs/compatibility.md) |
+| 查关闭项、验收证据或旧方案 | [计划状态](docs/plan-status.md) |

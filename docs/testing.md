@@ -1,157 +1,66 @@
 # 测试、验收与交付规范
 
-适用于当前插件版本、Python **3.11+** 和 AstrBot **`>=4.29.4,<4.30`**。先读 [AGENTS.md](../AGENTS.md) 的安全边界，按 [架构索引](architecture.md#故障定位索引) 找既有测试。报告使用本次运行的计数。
+从[故障定位索引](troubleshooting.md#故障定位索引) 找测试。以下命令在仓库根目录执行。Python 3.11+，[CI](../.github/workflows/test.yml) 使用 Ubuntu / Windows × Python 3.11 / 3.12、Node 22；[AstrBot 替身](../tests/astrbot_stub.py) 和 [CLI 夹具](../tests/fake_cli.py) 无需登录。
 
 ## 开发流程
 
-1. **查证**：读取 issue 正文/评论，记录基线 SHA、宿主/CLI 版本、当前工作区与既有改动。以当前源码和测试核验历史复现，必要时独立 worktree；不要覆盖用户的修改。
-2. **最小复现**：固定一个症状、模式、模型/档位与环境，使用合成 system/schema/参数。记录实际阶段、错误码、输出/执行计数和预期行为；缺证据标未知，先区分失败层级再设计修复。
-3. **实现**：复用既有夹具；行为修复增加能区分修复前后且验证契约的必要回归。不能删掉正确断言、放宽 permission/schema/认证或关闭防重放来让测试通过。文档改动无需新增镜像实现的测试。
-4. **定向检查**：先跑涉及模块的回归；确认命令确实加载到测试，不把导入错误或 0 项测试当作通过。
-5. **全量检查**：运行行为变化后执行下列 Python/Node/编译/差异检查。文档专项执行渲染、链接/锚点、围栏、版本/契约核对和 `git diff --check`；若另跑离线回归，单列实际结果，不能扩写为实机验证。
-6. **实机与审阅**：按授权范围分别验 CLI、宿主、生产与平台边界；没有环境就写未执行，不临时读取凭据或偷发模型请求。像 #16 这样要求独立 Agent 审读的任务，须另列审读结果并交维护者验收，不能用作者自审代替或直接合并。
-7. **交付**：按本页模板列改动、证据、通过/失败/跳过、环境、限制和回滚；未完成项保留明确状态。
+1. 写清任务范围、基线 SHA、复现与验收条件。先看 Issue 正文和评论，保护原有改动，避免无关重构。历史描述需用源码核对。并行 Agent 各用独立分支或 worktree，约定模块与文件归属、接口依赖及集成顺序。
+2. 用合成输入固定失败阶段，保留改动前证据；行为修复加必要回归，保持认证、权限、隔离和防重放断言。先跑定向测试，确认加载了预期用例。
+3. 行为变更再做全量离线检查。文档专项执行下方文档检查，按需要选择少量验证，通常无需全量回归或实机重测。
+4. 交付写明改动、依据、基线/交付 SHA、命令和结果、未知项、回滚方式。离线、CI、真实 CLI、宿主实机和生产分别记录。维护者补做实机后，在关联 PR 或当前证据索引更新日期、部署 SHA、环境、步骤及实际结果，缺项标未知。
 
-## 离线环境
-
-在仓库根目录运行。插件无新增第三方 pip 依赖；测试使用 [AstrBot 替身](../tests/astrbot_stub.py)、[fake_cli.py](../tests/fake_cli.py)、[fake_tool_cli.py](../tests/fake_tool_cli.py)。真实 CLI 或官方登录态不是离线测试前提。依赖宿主 logger 的运行模块不可因此宣称支持脱离 AstrBot 独立导入；独立探测入口另有边界。
-
-[CI](../.github/workflows/test.yml) 为 Ubuntu/Windows × Python 3.11/3.12，Node 22。平台、符号链接权限、可选宿主依赖等跳过项须保留实际原因；用 Python 3.12/Node 24 本地通过，不代表替代了所有 CI 单元。
+内部 Agent 调度 Issue 用于分工和收口，维护者可主动终止低优先级任务。外部反馈单独保留复现、影响与处理结论。关闭原因和验收证据分别记录，历史清单无需全部实现。见[计划状态](plan-status.md)。
 
 ## 定向回归
 
-以下均为现存可执行模块名，不需复制旧 issue 内依赖过期实现的片段。每行可独立执行：
+按任务选一行。前端改动加 `node --check views/setup/app.js` 和 `node --test tests/setup.test.mjs`。
 
-```sh
-# #12：ACP 一次性许可与 #11：拒绝后无正文归因
-python -m unittest tests.test_mcp_permissions tests.test_permission_attribution -v
+| 任务 | 仓库根目录命令 |
+| --- | --- |
+| #36 模型、路由、配置漂移和迁移 | `python -m unittest tests.test_onboarding tests.test_routing tests.test_main_init -v` |
+| #38 / #41 原生权限、共享预算、无 MCP、聊天指令 | `python -m unittest tests.test_issue38_permissions tests.test_issue41_readonly_builtins tests.test_mcp_permissions tests.test_permission_attribution tests.test_commands -v` |
+| #13 原始与模型 schema | `python -m unittest tests.test_tool_schemas -v` |
+| #38 / #43 额度刷新、每日用量和明细恢复 | `python -m unittest tests.test_issue38_quota tests.test_issue38_daily tests.test_onboarding tests.test_monitoring tests.test_telemetry tests.test_turn_history -v` |
+| #45 超时回填、收尾、防重放 | `python -m unittest tests.test_tool_pipeline tests.test_host_replay tests.test_b06_side_effects -v` |
+| #33 会话和持久历史 | `python -m unittest tests.test_tools_mode tests.test_tool_pipeline tests.test_sessions -v` |
+| #14 / #19 告警与定点 system 兼容 | `python -m unittest tests.test_system_prompt tests.test_safe_mode_rule tests.test_content_429 tests.test_notices tests.test_failure_guard -v` |
+| #24 / #32 当前图片与历史占位 | `python -m unittest tests.test_prompt_images tests.test_media tests.test_b07_b08_regressions -v` |
+| CLI、登录与无生成检测 | `python -m unittest tests.test_process_hardening tests.test_auth_config tests.test_login tests.test_diagnostics -v` |
 
-# #13：原始 schema 与模型 schema 分离
-python -m unittest tests.test_tool_schemas -v
+### 宿主源码离线检查
 
-# #14 / #19：本地能力声明过滤、Safe Mode 定点改写、429 候选与告警分类/冷却
-python -m unittest tests.test_system_prompt tests.test_safe_mode_rule tests.test_content_429 tests.test_notices tests.test_failure_guard -v
-
-# 工具交接及部分输出后禁止重放
-python -m unittest tests.test_tool_pipeline tests.test_host_replay -v
-
-# 用量、上下文与监控隐私/鉴权
-python -m unittest tests.test_telemetry tests.test_monitoring -v
-
-# 启动、认证、登录、模型保存
-python -m unittest tests.test_auth_config tests.test_login tests.test_diagnostics tests.test_onboarding -v
-
-# 原生可视化 Dashboard 语法与 DOM 回归
-node --check views/setup/app.js
-node --test tests/setup.test.mjs
-```
-
-对于单项故障，可在已定位测试类后继续指定单个方法；不要假定测试文件名与旧分支相同。源路径映射见 [故障定位索引](architecture.md#故障定位索引)。
-
-图片回归（#24 / #32：当前附件、历史媒体占位及会话复用）：
-
-```sh
-python -m unittest tests.test_prompt_images tests.test_media tests.test_sessions -v
-```
-
-新增 #32 定向回归：
-
-```sh
-python -m unittest tests.test_routing tests.test_b06_side_effects tests.test_b07_b08_regressions tests.test_failure_events -v
-```
-
-v0.8.1 恢复原生 DOM 回归，v0.8.3（#36）在此基础上覆盖三标签页切换、路由与配置漂移告警、本地目录缓存、弹窗防覆盖、原地编辑 `provider-update`、批量同步 `provider-repair` 与受控迁移 `provider-impact` 等交互，真实 iframe/多端视觉回归仍需在宿主中单独检查。
-
-### 模型管理、路由交互（#36）与工具权限 / 额度 / 只读梯队（#38 / #41）
-
-```sh
-python -m unittest tests.test_onboarding tests.test_routing tests.test_main_init tests.test_issue38_permissions tests.test_issue38_quota tests.test_issue38_daily tests.test_issue41_readonly_builtins tests.test_commands -v
-node --check views/setup/app.js
-node --test tests/setup.test.mjs
-```
-
-> `v0.8.4` 新增对工具权限注册表、Linux `1.5.17`/`1.5.18` `read_file` 分页参数、无宿主 MCP 解耦、非搜索拒止提示、额度快照缓存与本地每日用量统计的回归覆盖（`tests/setup.test.mjs` 扩至 42 项）。
-
-### 会话复用（#33）
-
-```sh
-python -m unittest tests.test_tools_mode tests.test_tool_pipeline tests.test_sessions -v
-```
-
-重点核对临时文本仍发给模型，宿主按持久化文本回放时复用，真实历史编辑时重建，以及工具续轮后用户消息和工具记录仍能匹配。
-
-### 额度刷新与近 24 小时明细恢复（#43）
-
-```sh
-python -m unittest tests.test_issue38_quota tests.test_issue38_daily tests.test_onboarding tests.test_main_init tests.test_monitoring tests.test_telemetry tests.test_turn_history -v
-node --check views/setup/app.js
-node --test tests/setup.test.mjs
-```
-
-定向检查覆盖注册路由、缓存命中与重试、跨登录环境隔离、页面进入和恢复、迟到响应、请求明细恢复、UTC 保留窗口、数量和大小上限、进程退出、落盘字段和存储故障降级。
-
-实机验收在受支持的 AstrBot 和已登录的官方 CLI 上进行。首次进监控和 60 秒后再进各观察一次按需查询，60 秒内重进与面板保持打开时确认 CLI 调用计数。发送数轮短消息，记录耗时、复用率、Token、每日热力图和会话池。先重载插件，再完整重启 AstrBot，核对明细连续、会话池重新建立、用量与失败诊断无重复。追加一轮请求确认统计只增加一次。
+`AGY_HOST_RUNNER_SOURCE` 设为 AstrBot 4.29.4 原版 `tool_loop_agent_runner.py` 的本地绝对路径，再运行 #45 定向命令。`test_tool_pipeline` 用真实 runner 方法或内置替身，`test_host_replay` 的可选真实源码用例未提供时跳过。`test_b06_side_effects` 单独从夹具指定的 `evidence/astrbot-v4.29.4` 读取源码，缺失时跳过。CLI 与模型仍由夹具替代。对照 `test_late_tool_result_*`、`test_max_steps_*`，检查一次无工具 prompt、无额外工具调用与零 fallback；覆盖跨运行、篡改、重复、已死会话和生成失败后重交。
 
 ## 全量离线回归
 
 ```sh
 python -m unittest discover -s tests -v
+node --check views/setup/app.js
 node --test tests/setup.test.mjs
 python -m compileall -q main.py agy_provider tests
+python tools/check_sensitive.py
 git diff --check
 ```
 
-分别保留每条命令的退出码及摘要。`unittest` 的 `Ran N tests` 包含跳过；`OK (skipped=S)` 不等于 N 项均通过。有 failures/errors/expected failures/unexpected successes 时分别记录，不能笼统写“全过”。Node 的 tests/pass/fail/cancelled/skipped/todo 也分别统计；编译通过只证明语法可编译。
-
-不通过时先核对实际代码、环境和夹具，不把 Windows 专属跳过计为 Linux 已验，不以重跑直到偶然全绿掩盖不稳定。通过后，仅在新增改动或未决失败需要时重复/扩大测试。
+报告退出码、成功/失败和跳过数及原因。`unittest` 的 `Ran` 含跳过，Node 的 `tests` 含非 pass 项。导入报错或 0 项测试需要单独定位。
 
 ## 文档专项检查
 
-- `git diff --name-only` / `git status --short` 核对包括新增文件在内的实际范围，确认没有 ACP、认证、Provider、WebUI 或配置行为修改。
-- 渲染 README 的 HTML/details、表格和 Mermaid；检查新文档的标题层级、配对代码围栏及列表，不把代码块里的伪链接当作正文链接。
-- 逐一验证修改文档中的相对文件/目录链接及本地标题锚点；有空格的真实路径须正确编码或用合适的 Markdown 链接。远程链接的可达性如未验证，单列限制。
-- 对照 `metadata.yaml`、main 注册、ACP clientInfo、MCP serverInfo 和 CHANGELOG 的当前版本；文档专项保持与当前发布基线一致；版本升级由维护者统一发布。
-- 当前基线 metadata 与 main 注册、ACP clientInfo、MCP serverInfo 均由 `agy_provider/_version.py` 统一（由 `tests/test_release_hygiene.py` 强校验一致）；具体版本号以 `metadata.yaml` 为准，不在文档里重复写死。
-- 扫描“本版/下一版/待验收/未发布”等易过时词语。历史文件保留原始证据，但在入口标注时间和后续状态；不要把历史计划中的未实现项改成当前已交付。
-- 对 #12、#13、#14、#19 走一遍文档导航，确认无需先读旧施工书就能找到源码、测试和保守结论。特别核验：一次性许可不绕过宿主、原始 schema 不被收窄、Safe Mode 仅定点改写、429 候选不是根因、已有输出不重放。
+- 用 `git status --short`、`git diff --name-only` 核对范围，用 `git diff --check` 检查空白。
+- 核对相对文件/目录、GitHub 标题锚点、代码围栏、README 分区和表格渲染。测试命令对应实际模块、脚本及可选依赖；远程未检查项单列。
+- 对照源码入口核验描述、注册端点和安全边界。[metadata.yaml](../metadata.yaml) 是版本入口，[_version.py](../agy_provider/_version.py) 的运行标识由 [test_release_hygiene.py](../tests/test_release_hygiene.py) 核对。历史证据注明范围，更新验收状态时保留已有记录。
 
 ## 实机验收
 
-真实生成和工具可能使用额度或产生副作用，在用户请求授权的范围内执行；无生成检查不得偷偷添加提示。每层独立写状态：
+| 层级 | 记录内容 |
+| --- | --- |
+| 离线与 CI | 分列本地环境/命令、CI run 与提交/矩阵，各自记录跳过 |
+| 官方 CLI 无生成 | 同一服务用户、CLI 版本、阶段、握手/会话/目录。额度另记冷缓存、并发合并、过期/手动、登录切换及真实查询数 |
+| 宿主实机 | AstrBot 版本、部署 SHA 和步骤。真实生成及工具优先使用短文本和无副作用 echo，记 prompt、工具执行及 fallback 次数；iframe 需核对管理员、窄屏、主题、复制及轮询终态 |
+| 生产 | 同样记录版本、部署、观察路径及结果，仅覆盖实际执行的场景。完整重启要核对持久统计连续、各轮只计一次、会话池如实重建 |
 
-| 层级 | 最小验收证据 | 不能推出 |
-| --- | --- | --- |
-| 离线 Python/Node | 当前提交、命令、计数、跳过原因 | 已登录、真实生成、生产工具可用 |
-| 当前提交 CI | run 链接/SHA、各平台矩阵状态 | 生产、macOS 或真实认证后端均已验 |
-| 官方 CLI 无生成 | 同用户/环境、版本、阶段、握手/会话/目录结果 | 账号有生成额度、MCP 工具可执行 |
-| 真实 Provider 生成 | 固定无敏感短问题、模型/档位、流式/非流式结果与调用次数 | 所有工具、图片、长期刷新可用 |
-| 工具链 | 无副作用 echo，permission、MCP、宿主执行/回填与原生 prompt 计数 | 所有生产工具或 QQ 完整链路均可用 |
-| 生产宿主 | 部署 SHA、宿主版本、实际路由/会话和观察结果 | 其他 runner/平台、429 根因已查明 |
-| WebUI | 原生 iframe、管理员身份、后台终态、主题/交互证据 | DOM 替身或静态预览可代替宿主 HTTP 验收 |
-
-工具验收优先使用合成 `probe_echo`，一次执行、一次原生 `session/prompt`，回填后继续原 prompt。记录实际计数；未观测到不写 0。还要覆盖拒绝、取消、超时、重复/过期/跨会话和已输出后失败不重放，避免有副作用工具作为探针。
-
-UI 修改需在原生宿主中检查窄屏（含 360px）、明暗主题、键盘/读屏、长 URL/模型名、复制失败、重复点击、迟到轮询、nonce 过期、登录归属和保存部分成功。验证 `monitor/status` 的匿名/非管理员/API Key 拒绝、管理员成功、no-store、隐私白名单与不启动模型请求。文档专项不必为这些路径虚构新实机验收。
-
-认证需分 Windows 权限/链接、macOS 钥匙串、Linux 文件/keyring，另验刷新/并发刷新/长期运行。minimal 组件实验、真实压缩事件与 Windows 桥实机的状态分别记录，不能用其他场景通过替代。
+真实生成、工具和部署仅在授权范围内执行。使用 [计划状态](plan-status.md) 查既有证据范围。
 
 ## 交付报告
 
-复制后填写真实结果，不预填成功或数量：
-
-```text
-范围：issue、基线 SHA、交付 SHA/分支；修改了哪些行为/文档。
-证据：最小症状/输入；源码/测试依据；事实、推断、未知分别列出。
-环境：日期、OS、Python、Node；真实测试另列 AstrBot/CLI、部署方式。
-定向检查：命令、退出码；通过/失败/错误/跳过数及原因。
-全量 Python：Ran、通过、失败、错误、跳过、预期失败/意外成功。
-Node：tests/pass/fail/cancelled/skipped/todo；编译/差异检查结果。
-文档：渲染、相对链接/锚点、围栏、版本和路径核对结果；远程检查范围。
-CI：当前提交 run 链接与矩阵状态，未执行写未执行。
-实机：无生成 / 真实生成 / 工具 / UI / 生产各自通过、失败或未执行。
-审阅：独立审读者、结论/遗留项；维护者验收状态。
-风险：剩余未知、平台边界、未做的场景，不引用旧记录冒充本次通过。
-回滚：文档提交可 revert；行为发布恢复已验版本并重载，保留配置与登录态。
-```
-
-发布行为变更时同步 metadata、main 注册版本、transport clientInfo、mcp_bridge serverInfo、README 与 CHANGELOG；确认维护者验收后再合并/发布。旧版报告仅为其指定 SHA/环境的证据，索引见 [CHANGELOG](../CHANGELOG.md)。
+按改动范围写基线/交付 SHA、源码和测试依据、命令/退出码及各环境结果，列出仍未知的事项和回滚路径。文档提交可直接 revert。行为回滚保留宿主配置、登录态及统计文件。
