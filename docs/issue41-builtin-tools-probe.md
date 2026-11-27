@@ -1,5 +1,7 @@
 # Issue #41 阶段一调查与只读原生工具实测报告
 
+> 实测记录限定于下述 CLI、平台和场景。当前授权契约见[工具策略](api.md#工具策略)，验收边界见[状态索引](plan-status.md)。
+
 日期：2026-11-26  
 实测环境：Linux（Docker 容器 `astrbot`，宿主 `xiaoyu`）、官方 CLI `Antigravity ACP Server 1.5.18`（`--gemini-dir` + `--app-data-dir` 隔离，无宿主 MCP `mcpServers: []`、`settings.json={"toolPermission":"strict","agentMode":""}`）。
 

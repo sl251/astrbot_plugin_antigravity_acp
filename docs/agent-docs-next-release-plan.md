@@ -1,6 +1,6 @@
 # 下一版本候选：Agent 文档与排障入口重构
 
-> **历史归档（已完成）**：#16 文档重构已在 v0.7.1 合并、发布；此处的“下一版本”“尚未验收”是施工阶段表述，不再代表当前待办。原始验证记录仍见 [验证记录](agent-docs-validation.md)，不能将当时未测试项目补写成通过。当前运行基线为 **v0.7.4**，导航以 [AGENTS.md](../AGENTS.md) 与 [计划状态索引](plan-status.md) 为准。
+> **历史归档（已完成）**：#16 文档重构已在 v0.7.1 合并、发布；此处的“下一版本”“尚未验收”是施工阶段表述，不再代表当前待办。原始验证记录仍见 [验证记录](agent-docs-validation.md)，不能将当时未测试项目补写成通过。当前导航以 [AGENTS.md](../AGENTS.md) 与 [计划状态索引](plan-status.md) 为准。
 > 当前入口：[AGENTS.md](../AGENTS.md)、[架构](architecture.md)、[排障](troubleshooting.md)、[测试](testing.md)。下列清单记录文档实施范围；勾选不代表实机验证或最终验收。关联 [#16](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/16)。
 
 ## 现状与问题

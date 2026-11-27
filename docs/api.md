@@ -1,96 +1,80 @@
 # WebUI 后端接口
 
-路径均相对 AstrBot 插件视图 bridge。沿用 apiGet/apiPost 的宿主 JSON 封装，下文描述 data。面板管理员认证共用现有规则，匿名 401，API key 和非面板管理员 403，新接口停用 503。原 setup/status 在停用后被直接调用仍沿用宿主 400。响应 no-store。POST 为 application/json，必须带 setup/status 当前 csrf。聊天使用独立的 AstrBot 管理员判定。
+路径相对 AstrBot 插件视图 bridge。下文是 `apiGet/apiPost` 解包后的 `data`。[Onboarding.handle()](../agy_provider/onboarding.py) 和 [Monitoring.handle()](../agy_provider/monitoring.py) 二次校验 Dashboard 管理员，拒绝 API key。响应 `Cache-Control: no-store`。`setup/*` POST 需要 `application/json`、至多 16 KiB 及本次加载的 `setup/status.csrf`。聊天指令使用独立的宿主管理员判定。
 
 ## 面板错误
 
-插件处理器返回的所有 `setup/*`、`monitor/*` HTTP 错误均保留 HTTP 状态码，JSON 使用 `{"status":"error","message":"[AGY:CODE] 人类可读说明","data":{"code":"CODE"}}`。AstrBot 4.29.4 的 iframe bridge 仅转发 `message` 字符串。前端可用 `^\[AGY:([A-Z][A-Z0-9_]*)\] ` 从 `error.message` 开头提取稳定码，展示时去掉该前缀。宿主在分发给插件前拒绝的请求仍可能只有宿主文案。
+处理器错误保留 HTTP 状态，JSON 形如 `{"status":"error","message":"[AGY:CODE] 说明","data":{"code":"CODE"}}`。AstrBot 4.29.4 iframe bridge 仅转发 `message`，按前缀 `^\[AGY:([A-Z][A-Z0-9_]*)\] ` 取稳定码。宿主提前拒绝时可能仅有宿主文案。
 
-| 稳定码 | HTTP | 含义 |
-| --- | --- | --- |
-| `UNAUTHENTICATED` | 401 | 缺少面板会话 |
-| `FORBIDDEN` | 403 | API key 或非配置的面板管理员 |
-| `CSRF_EXPIRED` | 403 | CSRF 缺失、无效或已过期 |
-| `LOGIN_BUSY` | 409 | 官方登录进行中，额度刷新未启动 |
-| `BUSY` | 409 | 其他并发操作冲突 |
-| `CLOSED` | 503 | 插件已停用，适用于 `monitor/*`、`setup/tool-policy`、`setup/quota-refresh` |
-| `CLOSED` | 400 | 原有 `setup/*` 接口的停用响应，包括 `setup/status` |
-| `STORAGE_UNAVAILABLE` | 503 | 本地每日统计存储不可用 |
-| `QUOTA_UNAVAILABLE` | 503 | 缺少额度服务 |
-| `CONFIG` / `UNSUPPORTED` | 400 | 请求参数或当前能力不允许该操作 |
-| `INTERNAL` | 500 | 本地操作失败，例如工具策略持久化失败 |
+| HTTP | 稳定码 |
+| --- | --- |
+| 401 | `UNAUTHENTICATED`（无面板会话） |
+| 403 | `FORBIDDEN`（身份不符）、`CSRF_EXPIRED` |
+| 409 | `BUSY`（操作冲突）、`LOGIN_BUSY`（额度查询遇到登录中） |
+| 503 | `CLOSED`（`monitor/*`、`setup/tool-policy`、`setup/quota-refresh`）、`STORAGE_UNAVAILABLE`、`QUOTA_UNAVAILABLE` |
+| 400 | `CONFIG`、`UNSUPPORTED` 等业务错误；原有 `setup/*` 停用时 `CLOSED` 也是 400 |
+| 500 | `INTERNAL`（本地操作失败） |
 
-其他已知业务异常沿用各自的 AGY 代码并返回 HTTP 400。HTTP 200 的额度快照仍通过快照内的 `error.code` 表示 CLI 查询失败。
+## 模型管理与路由
+
+GET `setup/status` 返回 `cached_models`、`efforts_by_model`、`providers`、`routing`、`busy`、`operation`、`report`、`result` 和 `action_error` 等。切换下拉模型使用缓存，显式刷新目录走 `setup/check`，暂态失败保留已发现的目录。后台操作先返回快照，轮询至 `busy=false` 并检查结果。新建若保存成功但切默认失败，`result.provider_id` 仍保留，`default_selected=false` 和 `action_error` 表示部分成功。
+
+| POST（均带 `csrf`） | 参数与行为 |
+| --- | --- |
+| `setup/check` | 可选 `model`。无生成启动、握手及目录检查。 |
+| `setup/apply` | `model` 来自目录，`effort` 默认 `default`，`use_default` 和 `create_only` 默认 `false`，可选 `tools_mode`。先复检；同模型/档位/模式的唯一匹配可复用，`create_only=true` 或多重匹配时报错。旧请求省略模式时查重匹配任意模式，新建使用 `chat`。 |
+| `setup/provider-update` | `provider_id`、`model`、`effort`、`tools_mode`。原地更新保留 ID，按需复检并重载，换模型重建会话。`effort` 取 `default/low/medium/high`，`tools_mode` 取 `inherit/chat/tools`。 |
+| `setup/provider-repair` | `provider_id` 或 `all: true`，二选一。修复无效档位/模式、来源、配置与运行态漂移，重算模态并移除残留 `audio`。 |
+| `setup/provider-default` | `provider_id`、`confirm: true`，设置并核验全局默认路由。`/agy use` 单独切换会话偏好。 |
+| `setup/provider-impact` | `provider_id`。同步返回 `{impact}`，预览已加载配置中的主项、fallback、已知辅助字段及已观测会话引用，`session_scan="unknown"` 表示未全库扫描。 |
+| `setup/provider-toggle` / `setup/provider-delete` | `provider_id`、`confirm: true`；toggle 另需布尔 `enabled`。停用/删除按影响要求选择可解析的 `migrate_default_to`，或用空串加 `force_confirm: true` 显式清空全局主项；有其他可见引用或需确认的情形还需 `force_confirm`。 |
+
+[routing.py](../agy_provider/routing.py) 以宿主合并配置计算有效档位、工具模式、`expected_modalities` 与 `config_errors`。`runtime_active` 只表示实例已加载。`routing` 分别给出 `configured_primary_id`、`resolved_primary_id`、`resolution_reason`、显式/失效 fallback、非默认 profile 覆盖数及最近服务观测。下线时在宿主锁内处理全局路由和实例变更；只清理显式确认下的全局 fallback 引用，其他 profile、辅助项和会话偏好需另行核对。切换或清空后重新读取实际解析，宿主仍可能隐式选首个实例。
 
 ## 工具策略
 
-GET `setup/status` 包含 `tool_policy`。POST `setup/tool-policy` 请求含 `csrf` 和至少一个工具策略字段。`read_file` 取 `deny` 或 `allow_once`，`search_web` 取 `deny` 或 `allow`，可单独保存或一同提交。例如 `{"csrf":"…","search_web":"allow"}`。只提交 `read_file` 的旧请求仍有效。成功直接返回相同结构的工具策略对象。下面是字段形状，数组按后端实际清单渲染。
+GET `setup/status` 的 `tool_policy` 字段与 POST `setup/tool-policy` 的成功响应使用相同的策略对象。POST 至少带一个已知工具字段，`read_file: "deny"|"allow_once"`、`search_web: "deny"|"allow"`，二者默认拒绝。仅持久化提交的 `builtin_read_file` / `builtin_search_web`；存盘失败回滚。工具行的 `policy` 为保存值，`effective` 为加载策略在所需条件满足时的全局可用性，`choices` 由后台决定。任一保存值待重载则顶层 `reload_required=true`。总闸由宿主插件配置保存，实例模式走 `provider-update`。
 
-```json
-{"enable_tools":true,"reload_required":false,"tools":[
-  {"id":"astrbot_mcp","source":"mcp","purpose":"宿主提供的工具","risk":"host","capability":"supported","choices":[],"policy":"allow_once","effective":true,"reload_required":false},
-  {"id":"read_file","source":"builtin","purpose":"读取隔离工作区顶层文本文件","risk":"high","capability":"supported","choices":["deny","allow_once"],"policy":"deny","effective":false,"reload_required":false},
-  {"id":"search_web","source":"builtin","purpose":"联网搜索","risk":"network","capability":"experimental","choices":["deny","allow"],"policy":"deny","effective":false,"reload_required":false,"pre_execution_approval":false,"enforcement":"post_observation","limitation":"CLI 自动执行搜索，无法在执行前审批。关闭时由模型护栏和事后中止限制，发现时搜索请求可能已发出。开启后按通知计入预算，超预算时中止本轮。"}
-]}
-```
+| 能力 | 运行边界 |
+| --- | --- |
+| 宿主 MCP | 受总闸与实例模式控制，快照来自宿主，审批与执行仍由宿主管理。[两层权限与 schema](architecture.md#mcp-的两层权限与两份-schema) |
+| `read_file` | 仅 Linux 官方 CLI `1.5.17` / `1.5.18`，版本探测与实际 ACP 握手均须通过，并使用 `strict`。活跃调用需匹配唯一 `allow_once` 及权限帧。仅当前私有工作区顶层、同属主、无组/其他写权限的普通单链接 `.txt`。合法 `StartLine` / `EndLine` / `ByteOffset` 为严格整数，参数在更新/权限帧之间须一致；拒绝 `file:///`、跨目录与软链接。插件核验元数据，CLI 读取。许可回包前计入次数预算。面板未确认时只提供 `deny`，启用请求返 `UNSUPPORTED`。 |
+| `search_web` | 实验性。CLI 自动执行，关闭时先用模型护栏约束，收到通知仍会中止；发现时联网请求可能已发出。开启时每个新调用在通知后计入次数预算，超预算中止当前轮。策略行显示 `pre_execution_approval=false`、`enforcement="post_observation"`。预算无法保证实际联网次数。 |
+| 固定拒绝 | 终端、写/改文件、网页读取/执行、浏览器、CLI 调度、子代理及工作流等。保持未知调用拒绝；以 [BUILTIN_SPECS](../agy_provider/builtin_tools.py) 为准。 |
 
-`policy` 为已保存策略，`effective` 表示当前加载的全局策略在具备所需条件的工具实例是否可用。`enable_tools` 取当前生效值。两项可开启的内置工具仅适用于工具实例（非 `chat` 且本轮 `tool_choice != "none"`），要求总闸开启；开启后即使本轮没有宿主 MCP 工具也可独立激活（无需等待非空宿主工具快照）。实例 `chat` 或本轮 `tool_choice=none` 时均不可用。MCP 清单由每轮宿主快照决定。
-
-`read_file` 仅在 Linux、CLI 版本探测及当前 ACP 握手均确认 `1.5.17` 或 `1.5.18`、`strict` 下开放，仅限当前私有工作区顶层普通单链接 `.txt` 文件，支持合法只读分页参数 `StartLine`、`EndLine`、`ByteOffset`（禁止 `file:///` URI 及参数篡改）。未确认时 `capability=unverified`、`choices=["deny"]`。每次授权绑定当前 prompt 的 ACP 请求并与 MCP 共用 `tool_max_calls`。
-
-`search_web` 是由官方 CLI 自动执行的实验性联网搜索。关闭时模型护栏要求避免该工具，插件在收到调用通知时中止本轮，搜索请求可能已经发出。开启时每个新搜索调用在收到通知后计入本轮工具调用次数，并与 MCP 和 `read_file` 共用 `tool_max_calls`。检测到超预算的搜索后中止本轮，已发出的请求无法撤回，预算无法保证实际联网次数。`pre_execution_approval: false`、`enforcement: "post_observation"` 和 `limitation` 说明上述限制。`edit_file`、`write_file`、`run_command`、`read_url`、`execute_url`、`browser` 及 CLI 内部调度/子代理/工作流工具继续固定拒绝（详情见 [CLI 1.5.18 原生工具调查报告](issue41-builtin-tools-probe.md)）。
-
-保存请求只更新所提交的全局 `builtin_read_file`、`builtin_search_web` 键，两项默认 `deny`。工具行的 `reload_required` 表示该行已保存策略与运行态不同，任一工具行待重载即令顶层 `reload_required: true`。重载后使用新策略和护栏。持久化失败会回滚本次提交并返回 HTTP 500。仅提交 `csrf`、未知字段、工具或策略返回 HTTP 400 `CONFIG`。未验证时提交 `read_file: "allow_once"` 返回 HTTP 400 `UNSUPPORTED`。总闸由宿主插件配置保存并重载，实例模式由原有 `setup/provider-update` 更新。
+两项可选原生工具都需要 `enable_tools`，受 `agy_tools_mode` 和 `tool_choice` 限制，可在没有宿主 MCP 时独立激活。MCP、读取和搜索共享本轮 `tool_max_calls`。预算及超时配置以 [schema](../_conf_schema.json) 为准。CLI 调查仅用于[追溯实测证据](issue41-builtin-tools-probe.md)。
 
 ## 官方 CLI 额度
 
-GET `monitor/quota` 仅读内存缓存，初始 `groups=[]`、`fetched_at=null`、`error=null`。进入监控页、从隐藏或往返缓存恢复、登录结束后，面板先读取缓存，只有缓存缺失或过期才尝试自动查询。
+GET `monitor/quota` 仅读内存缓存并核验环境，不启动 CLI。进入监控、页面恢复或登录结束时先 GET，缺失或过期才尝试一次按需 POST。GET 失败、缺少面板就绪条件或登录忙碌时跳过自动 POST。常规监控轮询与重置倒计时不刷新额度。
 
-POST `setup/quota-refresh` 接受 `{"csrf":"…","force":false}`。省略 `force` 或传 `true` 表示手动刷新，跳过 TTL 与失败冷却。其他类型和额外字段返回 400。按需刷新和 `/agy quota` 复用 60 秒内的成功快照。已核验登录环境的暂时失败冷却 60 秒，认证失败、CLI 未安装或不支持时等待手动刷新或登录环境变化。并发刷新合并为一次官方 CLI `/usage` 查询，超时 30 秒。登录中返回 409。
+POST `setup/quota-refresh` 仅接受 `csrf` 与可选严格布尔值 `force`，省略或 `true` 跳过成功缓存和失败冷却。`force=false` 与 `/agy quota` 走 60 秒缓存；可观察的同一登录环境中，暂态失败冷却 60 秒，`AUTH`、`NOT_INSTALLED` 或 `UNSUPPORTED` 等待手动刷新或环境变化。并发合并。`QuotaService` 先检查 CLI ≥ 1.5.17，再在临时工作目录运行官方 `agy -p /usage --output-format json`，含版本检查总超时 30 秒。只接受 `usage` 命令结果，存在 `num_turns` 时必须为整数 0。子进程继承服务用户的认证环境，插件仅读认证文件元数据。代理由插件 `proxy_mode` 决定，`custom` 注入 `proxy_url`，`direct` 清除 HTTP/HTTPS/ALL 代理变量（含大小写），`inherit` 继承原环境。
 
-额度快照仅保留在内存。登录操作、环境变化和认证失效会清除旧额度。无法观察登录环境的原生钥匙串只返回本次查询结果，既有快照与失败冷却均不跨次复用。面板的重置倒计时仅反映额度池的本地时间差。
+快照为 schema v1，`source="official_cli"`。`fetched_at` 是实际 UTC 采样时间，初始为 `null`，`groups=[]`、`error=null`。`groups[]` 含 `name`、`models_shared` 和 `buckets`，每个 bucket 有 `id`、`name`、`window`、`remaining_fraction`（0–1）、`reset_time`（UTC 或 `null`）。同组共享额度，不推算绝对额度。`capability` 为 `unknown/supported/unsupported`，`cli_version` 可为 `null`。
 
-```json
-{"schema_version":1,"source":"official_cli","login_env":"匿名环境标识","cli_version":"1.5.17","capability":"supported","fetched_at":"2026-11-26T05:00:00+00:00","stale":false,"groups":[{"name":"额度组","models_shared":["模型显示名"],"buckets":[{"id":"pool-week","name":"周额度","window":"weekly","remaining_fraction":0.75,"reset_time":null}]}],"error":null}
-```
-
-同组模型共享 buckets，window 使用 CLI 原值。已知前缀解析不到模型时 models_shared=[]。UTC 重置时间为 null 时显示不适用。无绝对额度或套餐推算。capability 取 unknown/supported/unsupported；cli_version 未知为 null。错误采用同一快照（HTTP 200），error 为 {code,message} 固定脱敏说明。代码 AUTH、TIMEOUT、NOT_INSTALLED、UNSUPPORTED、QUOTA_FORMAT、QUOTA_FAILED、ENV_CHANGED。失败时同环境可保留上次成功数据，stale=true；TTL 已过同样 stale。首次未查询 stale=false。
+查询失败通过 HTTP 200 快照内的脱敏 `error.code/message` 表达，代码见 [quota.py](../agy_provider/quota.py)。同环境暂态失败可保留上次成功值并标 `stale=true`。登录流程、环境变更及认证失效废弃旧值；`login_env` 为服务内匿名标记。不可观察的原生认证环境只返回当次查询结果，后续不复用快照和冷却。插件停用取消查询并清空缓存。
 
 ## 近 24 小时运行统计
 
-GET `monitor/status` 沿用 schema v2。每个运行实例的 `summary` 和 `recent_turns` 包含窗口内的历史和实时样本，`/agy cost` 使用相同统计来源。每个实例最多 100 轮，接口返回最近 20 轮明细。复用率按实际发出的轮次计算。缺失用量保留为 `null`。
-
-`instances[].history_storage` 为 `available` 或 `memory_only`。实例未加载时为 `null`。恢复的样本带 `historical: true`，时间和模型仍为采样时的值。`pool`、`latest_context` 和当前运行状态来自本次加载后的运行时。每日用量与失败诊断继续使用独立存储，额度查询不进入请求统计。 [存储与实例归属](architecture.md#监控明细存储)
+GET `monitor/status` 使用 schema v2，含 `routing`、失败摘要、窗口及 `instances`。每实例 `summary` 和 `recent_turns` 使用合并后的实时和已恢复样本；保留最多 100 轮，接口返回最近 20 轮。`/agy cost` 同源。`historical: true` 表示已恢复样本，`history_storage` 为 `available` / `memory_only`，未加载为 `null`。`pool`、`latest_context` 与运行状态来自当前 runtime。缺失用量保持 `null`，复用率按实际发出的轮次计算。额度查询不进入生成统计。[落盘字段、保留期限及降级](architecture.md#监控明细存储)
 
 ## 每日用量
 
-GET `monitor/daily/30`、`monitor/daily/90`、`monitor/daily/365`，默认展示 90 天。每次返回区间内全部模型，前端可本地筛选、切换指标。宿主本地日历含今日，日期无需转换。仅返回实际有终结轮次的日期，区间内缺行表示无记录。
+GET `monitor/daily/30`、`monitor/daily/90`、`monitor/daily/365` 返回 schema v1，`timezone="host_local"`。`range` 含 `days/start/end`，`end` 是宿主今天。`models` 为区间模型列表，`days` 仅含有终结轮的日期，含 `date` 及 `by_model`，同一组数值列在日级、模型级均有。
 
-```json
-{"schema_version":1,"timezone":"host_local","range":{"days":90,"start":"2026-08-29","end":"2026-11-26"},"models":["model-id"],"days":[{"date":"2026-11-26","requests":2,"success":1,"failed":1,"input_tokens":100,"cached_tokens":20,"output_tokens":10,"total_tokens":110,"usage_unknown_turns":1,"by_model":{"model-id":{"requests":2,"success":1,"failed":1,"input_tokens":100,"cached_tokens":20,"output_tokens":10,"total_tokens":110,"usage_unknown_turns":1}}}]}
-```
-
-requests 含失败、取消及本地短路，success 只计 ok，其余计 failed。按完成时宿主日期入账。input_tokens 包含可观测缓存，cached_tokens 为其中的缓存读取，total_tokens 为已知输入和输出之和。部分缺字段时各列为已知和，全未知的列为 null，未发出请求的已知零保留为 0。usage_unknown_turns 统计已发出但缺可用 usage 的轮。只存日/模型汇总，无旧数据回填。今天取 range.end，活跃天数为有记录的日期数，日均按有记录天数计算。存储故障返回 HTTP 503。模型键来自本地轮次，配置映射沿用 setup/status.providers[].id/model、monitor/status.instances[].provider_id/model。CLI 共享组的显示名独立，不猜测 Provider 对应额度池。
+- `requests` 含失败、取消及本地短路，`success` 只计 `ok`，其余计 `failed`。
+- `input_tokens` 含 `cached_tokens`，`total_tokens` 是已知输入与输出（`output_tokens`）之和。全未知列为 `null`，已知零和无记录分别显示。
+- `usage_unknown_turns` 为已发送但未获可用 usage 的轮次。模型名以实际本地轮次为准；额度组另由官方 CLI 提供。每日库不可用时返回 503。
 
 ## 聊天管理员指令
 
-| 指令 | 功能与范围 |
+| 指令 | 用途 |
 | --- | --- |
-| /agy help | 列出指令与参数 |
-| /agy setup | 设置入口及已有实例 |
-| /agy use <provider_id> | 切换当前会话 |
-| /agy cost | 现有本地成本与复用统计 |
-| /agy doctor | 无生成自检 |
-| /agy quota | 官方 CLI 额度 |
-| /agy status | 已加载实例及运行状态 |
-| /agy models | 已配置模型与实例 ID |
-| /agy usage [30&#124;90&#124;365] | 本地每日统计摘要及最近 28 天文本热力图，默认 90 天 |
+| `/agy`、`/agy help` | 帮助 |
+| `/agy setup`、`/agy models` | 设置入口、模型和实例 |
+| `/agy use <provider_id>` | 切换当前会话 |
+| `/agy status`、`/agy doctor` | 加载状态、无生成自检 |
+| `/agy cost`、`/agy quota` | 本地成本统计、官方额度 |
+| `/agy usage [30&#124;90&#124;365]` | 每日用量摘要，默认 90 天，附最近 28 天文本热力图 |
 
-上述指令在插件启用且宿主将消息分发给插件的私聊、群聊中使用。管理员发送裸 `/agy` 时显示同 `/agy help` 的帮助。非管理员发送裸 `/agy` 或已注册子指令时只收到 `AGY [FORBIDDEN] 仅管理员可使用此指令。`。额度服务在查询时停用，`/agy quota` 会提示 `AGY [CLOSED] 插件已停用。`。
-
-## 变更记录
-
-- 2026-11-26 生产根因调查返回后，setup/status 新增可空字符串 command_scope_warning。默认配置显式排除本插件时返回修复提示。会话单独绑定的配置仍需管理员核对。
-- 2026-11-26 14:04 CST 收紧 read_file 能力范围至实测的 Linux，并在每次启动时核对实际 ACP agentInfo，以覆盖 wrapper 目标热替换。macOS 与 Windows 返回 unverified。
-- 2026-11-26 14:13 CST 补充 /agy usage 聊天输出中的 28 天文本热力图。HTTP 统计字段和区间保持原契约。
-- 2026-11-26 14:20 CST 按已注册路由的实测响应补记登录中 409 和原 setup/status 的停用状态码，便于前端处理迟到请求。
+需插件启用且宿主已分发该消息。非管理员裸命令或已注册子命令只收到 `FORBIDDEN`。`setup/status.command_scope_warning` 只检查默认配置的插件范围，会话独立配置由管理员核对。
