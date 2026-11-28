@@ -206,6 +206,42 @@ class MediaB07Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "INPUT")
 
 
+    async def test_tool_image_continuation_rejects_smuggled_extra_image_and_disabled_images(self):
+        path = "/tool_image_cache/result.png"
+        user_image = {"type": "image_url", "image_url": {"url": _png_data_url()}}
+        tool_image = {"type": "image_url", "image_url": {
+            "url": _png_data_url(rgb=(11, 22, 33)), "id": path,
+        }}
+        contexts = [
+            {"role": "user", "content": [user_image]},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "c-1", "function": {"name": "echo", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_call_id": "c-1", "content": (
+                f"Image returned and cached at path='{path}'. "
+                "Review the image below. Use send_message_to_user to send it to the user if satisfied, "
+                f"with type='image' and path='{path}'."
+            )},
+            {"role": "user", "content": [
+                {"type": "text", "text": f"[Image from tool 'echo', path='{path}']"},
+                tool_image,
+            ]},
+        ]
+        smuggled_url = _png_data_url(rgb=(44, 55, 66))
+        for extras, urls, settings, code in (
+            ([{"type": "image_url", "image_url": {"url": smuggled_url}}], None, self._settings(), "INPUT"),
+            (None, [smuggled_url], self._settings(), "INPUT"),
+            # Empty host modalities still append the tool image.
+            (None, None, self._settings(enable_images=False), "IMAGES_DISABLED"),
+        ):
+            with self.subTest(code=code, via_image_urls=urls is not None):
+                with self.assertRaises(AgyError) as caught:
+                    await prepare_media(contexts, None, extras, urls, settings)
+                self.assertEqual(caught.exception.code, code)
+                if code == "INPUT":
+                    self.assertIn("工具续轮不能附加新的图片。", str(caught.exception))
+
+
 class NoticeSegmentationB08Tests(unittest.TestCase):
     def test_b08_acp_client_on_update_no_newline_prefix_flushed_and_retries_segmented_across_tools(self):
         client = AcpClient(Settings())

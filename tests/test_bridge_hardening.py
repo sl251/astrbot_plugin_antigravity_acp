@@ -15,10 +15,11 @@ from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.process import spawn, stop_process
 from agy_provider.tools import ToolBroker, ToolSnapshot
+from tests.test_b07_b08_regressions import _png_data_url
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
-    async def make_broker(self):
+    async def make_broker(self, *, tcp=True):
         snapshot = ToolSnapshot(SimpleNamespace(tools=[SimpleNamespace(
             name="echo", active=True, description="offline test", parameters={
                 "type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"],
@@ -27,7 +28,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         broker.session_id, broker.turn_active = "session", True
         self.addAsyncCleanup(broker.close)
         # Exercise Windows transport on every platform, plus native POSIX below.
-        broker.transport = BridgeTransport(tcp=True)
+        broker.transport = BridgeTransport(tcp=tcp)
         config = await broker.start()
         return broker, config
 
@@ -58,6 +59,41 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         duplicate = await self.rpc(endpoint, token, self.request())
         self.assertEqual(duplicate["error"]["message"], "TOOL_DUPLICATE")
         self.assertEqual(broker.audit[call.id], "completed")
+
+    async def test_broker_resolve_with_image_attachments_and_frame_budget(self):
+        for tcp in ((True, False) if os.name == "posix" else (True,)):
+            with self.subTest(tcp=tcp):
+                broker, config = await self.make_broker(tcp=tcp)
+                proc = await spawn([config["command"], *config["args"]], env={**os.environ, **config["env"]})
+                self.addAsyncCleanup(stop_process, proc)
+                proc.stdin.write(encode({"jsonrpc": "2.0", **self.request()}) + b"\n")
+                await proc.stdin.drain()
+                call = await asyncio.wait_for(broker.ready.get(), 2)
+                broker.handoff(call)
+
+                main = {"type": "text", "text": "结果"}
+                label = {"type": "text", "text": "图片"}
+                image = {"type": "image", "mimeType": "image/png", "data": _png_data_url().split(",")[1]}
+                for attachments, code in (
+                    ({}, "TOOL_RESULT"),
+                    ([{"type": "image", "mimeType": "image/webp", "data": "AA=="}], "TOOL_RESULT"),
+                    ([{"type": "text", "text": 1}], "TOOL_RESULT"),
+                    ([{**label, "text": "x" * broker.settings.tool_result_bytes}], "TOOL_RESULT_LIMIT"),
+                    ([{**image, "data": "A" * (15 * FRAME_LIMIT)}], "TOOL_RESULT_LIMIT"),
+                ):
+                    with self.assertRaises(AgyError) as caught:
+                        broker.resolve(call.id, main["text"], attachments=attachments)
+                    self.assertEqual(caught.exception.code, code)
+                    self.assertFalse(call.future.done())
+                    self.assertEqual(broker.result_bytes, 0)
+
+                broker.resolve(call.id, main["text"], attachments=[label, image])
+                reply = await asyncio.wait_for(read_frame(proc.stdout), 3)
+                self.assertEqual(reply["result"], {"content": [main, label, image], "isError": False})
+                self.assertEqual(broker.result_bytes, len((main["text"] + label["text"]).encode()))
+                proc.stdin.close()
+                await asyncio.wait_for(proc.wait(), 3)
+                self.assertEqual(proc.returncode, 0)
 
     async def test_wrong_key_fake_server_and_instances_do_not_dispatch(self):
         one, config1 = await self.make_broker()

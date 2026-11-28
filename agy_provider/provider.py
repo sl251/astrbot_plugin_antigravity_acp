@@ -17,7 +17,7 @@ from .config import Settings
 from .errors import AgyError
 from .host_compat import max_steps_notice
 from .media import ImageFingerprints, prepare_media
-from .messages import digest, normalize
+from .messages import digest, has_tool_image_markers, normalize, tool_continuation_tail
 from .paths import plugin_data_root
 from .sessions import Runtime
 from .system_prompt import filter_host_capabilities
@@ -465,18 +465,38 @@ class AgyProvider(Provider):
 
         try:
             raw_contexts = self._ensure_message_to_dicts(contexts) or []
-            if raw_contexts and prompt is None and not tool_calls_result:
+            raw_tail = tool_continuation_tail(raw_contexts, stage="raw")
+            continuation = continuation or bool(
+                prompt is None and raw_contexts
+                and (raw_tail is not None or raw_contexts[-1].get("role") == "tool")
+            )
+            if (
+                prompt is None and raw_tail is None and len(raw_contexts) >= 2
+                and has_tool_image_markers(raw_contexts[-1], raw_contexts[-2])
+            ):
+                # A malformed image return is still a tool-result failure,
+                # including after the original turn has already been retired.
+                continuation = True
+                raise AgyError("TOOL_HISTORY", "工具图片消息未通过原始格式校验。")
+            if raw_contexts and raw_tail is None and prompt is None and not tool_calls_result:
                 latest = _restore_user_text_markers(
                     raw_contexts[-1], contexts[-1], extra_user_content_parts
                 )
                 if latest is not raw_contexts[-1]:
                     raw_contexts = [*raw_contexts[:-1], latest]
-            continuation = continuation or bool(
-                prompt is None and raw_contexts and raw_contexts[-1].get("role") == "tool"
-            )
             finalization_has_results = final_notice is not None and any(
                 message.get("role") == "tool" for message in raw_contexts
             )
+            if prompt is None and raw_tail is not None and raw_tail.has_images:
+                original_parts = getattr(contexts[-1], "content", None)
+                if isinstance(original_parts, list) and any(_is_temporary(p) for p in original_parts):
+                    raise AgyError("TOOL_HISTORY", "工具图片标注不能包含临时文本。")
+            if (
+                owns_existing_turn and final_notice is None and not tool_calls_result
+                and prompt is None and raw_tail is None
+            ):
+                # A failed raw exchange must not reach URL or local file loading.
+                raise AgyError("TOOL_HISTORY", "工具续轮缺少唯一、完整且匹配的已审计调用/结果。")
             if approver is not None and not inspect.iscoroutinefunction(approver):
                 raise AgyError(
                     "TOOL_CONTEXT", "agy_tool_approver 必须为异步宿主审批回调。"
@@ -566,11 +586,13 @@ class AgyProvider(Provider):
                             "TOOL_HISTORY", "工具结果已在 contexts 中，不能重复提交。"
                         )
                     raw_contexts.extend(exchange)
-            continuation = bool(
-                raw_contexts
-                and raw_contexts[-1].get("role") == "tool"
-                and prompt is None
-            )
+            tail = tool_continuation_tail(raw_contexts) if prompt is None else None
+            if tail is not None and tail.has_images and (
+                raw_tail is None or not raw_tail.has_images
+            ):
+                continuation = True
+                raise AgyError("TOOL_HISTORY", "工具图片消息未通过原始格式校验。")
+            continuation = tail is not None or continuation
             request = normalize(
                 raw_contexts,
                 prompt,

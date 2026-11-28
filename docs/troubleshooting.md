@@ -18,7 +18,7 @@
 | `TOOL_ARGUMENTS` / `TOOL_SCHEMA`，合法数组被拒 | [tools.py](../agy_provider/tools.py) `ToolSnapshot` / `ToolBroker.dispatch` | [schema](../tests/test_tool_schemas.py) | [原始契约](#tool_arguments-与-13) |
 | `TOOLS_DISABLED` / `TOOL_CHOICE`、原生读取不可用或实验搜索被中止 | [builtin_tools.py](../agy_provider/builtin_tools.py)、[provider.py](../agy_provider/provider.py)、[sessions.py](../agy_provider/sessions.py) | [策略](../tests/test_issue38_permissions.py)、[只读/无 MCP](../tests/test_issue41_readonly_builtins.py)、[DOM](../tests/setup.test.mjs) | [工具检查](#工具图片与监控) |
 | `TOOL_TIMEOUT` / `TOOL_STALE`，长工具返回后无关回复或尝试 fallback | [tools.py](../agy_provider/tools.py)、[sessions.py](../agy_provider/sessions.py) `TimedOutTool`、[tool_turn.py](../agy_provider/tool_turn.py) `chat_events` | [迟到结果/收尾](../tests/test_tool_pipeline.py)、[防重放](../tests/test_host_replay.py) | [超时回填](#宿主工具执行超时后的回填) |
-| `TOOL_CONTEXT` / `TOOL_HISTORY`、步数用尽或交接后发生重放 | [host_compat.py](../agy_provider/host_compat.py) `max_steps_notice`、[provider.py](../agy_provider/provider.py)、[tool_turn.py](../agy_provider/tool_turn.py) | [收尾](../tests/test_tool_pipeline.py)、[runner fallback](../tests/test_host_replay.py)、[副作用](../tests/test_b06_side_effects.py) | [步数收尾](#步数耗尽后的收尾) |
+| `TOOL_CONTEXT` / `TOOL_HISTORY`、工具图片续轮、步数用尽或交接后发生重放 | [host_compat.py](../agy_provider/host_compat.py) `max_steps_notice`、[provider.py](../agy_provider/provider.py)、[messages.py](../agy_provider/messages.py) `tool_continuation_tail`、[tool_turn.py](../agy_provider/tool_turn.py) | [图片回填与收尾](../tests/test_tool_pipeline.py)、[runner fallback](../tests/test_host_replay.py)、[副作用](../tests/test_b06_side_effects.py) | [工具图片](#工具图片与监控)、[步数收尾](#步数耗尽后的收尾) |
 | `history_rewrite` 频发、图片重复或丢失 | [messages.py](../agy_provider/messages.py)、[sessions.py](../agy_provider/sessions.py)、[media.py](../agy_provider/media.py) | [会话池](../tests/test_sessions.py)、[模式](../tests/test_tools_mode.py)、[历史图片](../tests/test_prompt_images.py)、[媒体](../tests/test_media.py) | [会话复用](#会话复用与历史重写)、[图片检查](#工具图片与监控) |
 | 额度为空、过期或登录中 `LOGIN_BUSY` | [quota.py](../agy_provider/quota.py)、[onboarding.py](../agy_provider/onboarding.py)、[app.js](../views/setup/app.js) | [缓存与环境](../tests/test_issue38_quota.py)、[端点与 CSRF](../tests/test_onboarding.py)、[页面刷新](../tests/setup.test.mjs) | [额度与统计](#额度与统计) |
 | `STORAGE_UNAVAILABLE`、「仅内存统计」、监控 401/403 | [monitoring.py](../agy_provider/monitoring.py)、[daily_usage.py](../agy_provider/daily_usage.py)、[turn_history.py](../agy_provider/turn_history.py)、[telemetry.py](../agy_provider/telemetry.py) | [监控](../tests/test_monitoring.py)、[每日](../tests/test_issue38_daily.py)、[明细](../tests/test_turn_history.py)、[失败记录](../tests/test_failure_events.py) | [额度与统计](#额度与统计) |
@@ -75,7 +75,7 @@ python -m agy_provider.probe --command /absolute/path/to/agy --timeout 60
 ## 工具、图片与监控
 
 - 工具总闸、实例模式、宿主 `tool_use` 与 `tool_choice` 分别核对。MCP 另查 ToolSet、身份和取消信号；原生工具可不带 MCP，但仍按版本、策略、当前会话和预算核验。保存权限后重载并读 `effective`。搜索关闭时的取消仅是事后观察。见[工具策略](api.md#工具策略)。
-- 图片核对总闸、宿主 `image`、CLI 能力及文件格式。会话重建只附当前用户最新轮图片。报告仅收脱敏数量、来源类型和错误码，保留路径、大小及 SSRF 约束。
+- 图片核对总闸、宿主 `image`、CLI 能力及文件格式。带图续轮遇到 `TOOL_HISTORY` 时，检查闭合交换是否位于尾部、图片标注与缓存段落是否逐一匹配，以及宿主预览是否截掉了缓存段落。报告仅收脱敏数量、来源类型和错误码。
 - iframe 复制在用户手势内尝试 Clipboard API，再同步 `execCommand("copy")`，失败则选中文本。HTTP 或 sandbox 下 Clipboard API 可能缺失，弹窗可能被宿主拦截。轮询勿重写未变化的输入值，避免折叠选区。
 
 ### 额度与统计
