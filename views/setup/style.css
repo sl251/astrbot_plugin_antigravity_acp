@@ -202,6 +202,8 @@
 :root {
   accent-color: var(--primary);
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  /* 允许支持固有尺寸动画的浏览器对折叠面板执行平滑展开/收起过渡 */
+  interpolate-size: allow-keywords;
 }
 
 *,
@@ -840,6 +842,426 @@ h2 {
   color: var(--subtle);
 }
 
+/* 历史调用记录（可折叠 AstrBot 风格面板） */
+.turn-history-card.is-collapsed .turn-history-head {
+  margin-bottom: 0;
+}
+
+.turn-history-toggle {
+  gap: 7px;
+}
+
+.turn-history-chevron {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-right: 1.75px solid currentColor;
+  border-bottom: 1.75px solid currentColor;
+  transform: translateY(-1.5px) rotate(45deg);
+  transition: transform 180ms ease;
+}
+
+.turn-history-toggle[aria-expanded="true"] .turn-history-chevron {
+  transform: translateY(1.5px) rotate(-135deg);
+}
+
+.turn-history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  block-size: 0;
+  opacity: 0;
+  overflow: clip;
+  transition: block-size 220ms ease, opacity 160ms ease;
+}
+
+.turn-history-panel.is-open {
+  block-size: auto;
+  opacity: 1;
+}
+
+.turn-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+}
+
+.turn-history-filters,
+.turn-history-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.turn-history-select-wrap {
+  min-width: 140px;
+  max-width: 240px;
+}
+
+.turn-history-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.turn-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  min-width: 0;
+}
+
+.turn-summary-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.turn-summary-value {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.turn-summary-sub {
+  font-size: 11.5px;
+  color: var(--subtle);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.turn-history-body {
+  min-width: 0;
+}
+
+.turn-history-empty {
+  padding: 16px;
+  border-radius: var(--radius-inner);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.turn-history-table-wrap {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(460px, 68vh);
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  container-type: inline-size;
+}
+
+.turn-history-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  --label-2: "状态";
+  --label-3: "模型与会话";
+  --label-4: "耗时";
+  --label-5: "非缓存输入";
+  --label-6: "缓存命中";
+  --label-7: "输出";
+  --label-8: "明细";
+}
+
+.turn-history-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  background: var(--surface-subtle);
+}
+
+.turn-history-table th,
+.turn-history-table td {
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+}
+
+.turn-history-table thead th {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  background: var(--surface-subtle);
+}
+
+.turn-history-table .col-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.turn-history-table tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--surface);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.turn-row:hover td,
+.turn-row:hover th {
+  background: var(--hover);
+}
+
+.turn-row-main {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.turn-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--subtle);
+  overflow-wrap: anywhere;
+}
+
+.turn-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--track);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.turn-chip.is-primary {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.turn-chip.is-warn {
+  background: var(--paused-soft);
+  color: var(--paused);
+}
+
+.turn-chip.is-ok {
+  background: var(--running-soft);
+  color: var(--running);
+}
+
+.turn-model-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 140px;
+}
+
+.turn-model-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.turn-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.turn-num-strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.turn-num-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.turn-detail-btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.turn-detail-cell {
+  padding: 10px 14px 14px;
+  background: var(--surface-subtle);
+}
+
+.turn-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+}
+
+.turn-detail-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.turn-detail-item dt {
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.turn-detail-item dd {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+@container (width < 640px) {
+  .turn-history-table-wrap {
+    border: 0;
+    background: transparent;
+    max-block-size: none;
+  }
+
+  .turn-history-table,
+  .turn-history-table thead,
+  .turn-history-table tbody,
+  .turn-history-table tr,
+  .turn-history-table th,
+  .turn-history-table td {
+    display: block;
+  }
+
+  .turn-history-table thead {
+    display: none;
+  }
+
+  .turn-history-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .turn-row {
+    border-radius: var(--radius-inner);
+    border: 1px solid var(--border);
+    background: var(--surface-subtle);
+    overflow: hidden;
+  }
+
+  .turn-history-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: var(--surface-subtle);
+    border-bottom: 1px solid var(--border);
+    white-space: normal;
+  }
+
+  .turn-history-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    text-align: right;
+  }
+
+  .turn-history-table td.col-num {
+    text-align: right;
+  }
+
+  .turn-history-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .turn-history-table td:nth-child(2)::before {
+    content: var(--label-2) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(3)::before {
+    content: var(--label-3) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(4)::before {
+    content: var(--label-4) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(5)::before {
+    content: var(--label-5) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(6)::before {
+    content: var(--label-6) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(7)::before {
+    content: var(--label-7) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-history-table td:nth-child(8)::before {
+    content: var(--label-8) "：";
+    color: var(--muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .turn-model-cell {
+    align-items: flex-end;
+    min-width: 0;
+  }
+
+  .turn-meta-tags {
+    justify-content: flex-end;
+  }
+
+  .turn-detail-row {
+    border-radius: var(--radius-inner);
+    border: 1px solid var(--border);
+    background: var(--surface-subtle);
+  }
+
+  .turn-history-table td.turn-detail-cell {
+    display: block;
+    text-align: left;
+  }
+
+  .turn-history-table td.turn-detail-cell::before {
+    content: none;
+  }
+}
+
 /* 账号额度监控 */
 .quota-card[data-stale="true"] .quota-groups {
   opacity: 0.72;
@@ -1138,7 +1560,7 @@ h2 {
 .heatmap-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 4px;
+  padding: 4px;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1205,7 +1627,8 @@ h2 {
   border-radius: 3.5px;
   border: 1px solid transparent;
   background: var(--hm-empty-bg);
-  transition: transform 100ms ease, border-color 100ms ease;
+  /* 仅过渡边框与外描边颜色，避免 scale 缩放引发边缘裁剪、scrollWidth 抖动与光标抽动 */
+  transition: border-color 100ms ease, box-shadow 100ms ease;
 }
 
 .hm-cell[data-level="empty"] {
@@ -1240,8 +1663,8 @@ h2 {
 }
 
 .hm-cell:hover {
-  transform: scale(1.18);
   border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--text);
 }
 
 .hm-cell.is-selected {
@@ -1250,11 +1673,11 @@ h2 {
 }
 
 .heatmap-footer {
+  /* 固定两行分工：详情独占一行并锁定最小高度，图例始终位于第二行，彻底避免悬停切换文本长度导致的页面高度跳变 */
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
@@ -1265,6 +1688,8 @@ h2 {
 
 .heatmap-detail {
   font-size: 12.5px;
+  line-height: 1.5;
+  min-height: calc(2 * 1.5em);
   color: var(--text);
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
@@ -1274,6 +1699,7 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   font-size: 11.5px;
   color: var(--muted);
@@ -2051,9 +2477,18 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .daily-model-wrap {
+  .daily-model-wrap,
+  .turn-history-select-wrap {
     width: 100%;
     max-width: none;
+  }
+
+  .heatmap-detail {
+    min-height: calc(3 * 1.5em);
+  }
+
+  .heatmap-legend {
+    justify-content: flex-start;
   }
 
   .copy-toast {
@@ -2088,6 +2523,9 @@ code {
   .panel,
   .quota-group,
   .quota-bucket,
+  .turn-summary-item,
+  .turn-history-table-wrap,
+  .turn-detail-item,
   .tool-row,
   .tool-switch,
   .tool-switch-thumb,

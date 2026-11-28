@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from .onboarding import PLUGIN_NAME
 from .routing import dashboard_admin, routing_snapshot
-from .telemetry import daily_snapshot, failure_snapshot
+from .telemetry import MAX_HISTORY_TURNS, daily_snapshot, failure_snapshot
 from .web_errors import WEB_HEADERS, web_error
 
 
@@ -17,7 +17,7 @@ class Monitoring:
         self.routes = []
 
     def register(self):
-        for resource in ("status", "quota", "daily/30", "daily/90", "daily/365"):
+        for resource in ("status", "turns", "quota", "daily/30", "daily/90", "daily/365"):
             async def handler(resource=resource):
                 return await self.handle(resource)
 
@@ -27,7 +27,7 @@ class Monitoring:
 
     async def handle(self, resource="status"):
         from astrbot.api.web import json_response, request
-        from .provider import instance_monitor_snapshots
+        from .provider import instance_monitor_snapshots, instance_turn_history_snapshots
 
         # AstrBot authenticates the dashboard session before dispatch. Its
         # dashboard has one configured admin username, not a chat-platform ID.
@@ -47,6 +47,15 @@ class Monitoring:
                 if self.quota.closed:
                     return web_error("CLOSED", "插件已停用。", 503)
                 return json_response(self.quota.snapshot(), headers=WEB_HEADERS)
+            if resource == "turns":
+                # 只读内存中的历史窗口快照（含重启后恢复的近 24 小时明细），不触发任何 CLI 或 I/O。
+                payload = {
+                    "schema_version": 1,
+                    "sampled_at": datetime.now(timezone.utc).isoformat(),
+                    "window": {"hours": 24, "max_turns_per_instance": MAX_HISTORY_TURNS},
+                    "instances": instance_turn_history_snapshots(manager),
+                }
+                return json_response(payload, headers=WEB_HEADERS)
             if resource.startswith("daily/"):
                 try:
                     payload = daily_snapshot(int(resource.split("/")[1]))

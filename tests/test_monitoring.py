@@ -513,3 +513,53 @@ class MonitoringTests(unittest.IsolatedAsyncioTestCase):
         # Empty string error_code converges to None rather than UPSTREAM.
         bad_record["error_code"] = ""
         self.assertIsNone(telemetry.safe_recent_turns(1)[0]["error_code"])
+
+    async def test_turn_history_endpoint_returns_up_to_100_turns_with_admin_gate_and_privacy(self):
+        from agy_provider.telemetry import start_diagnostics, stop_diagnostics
+
+        start_diagnostics(Path(self.temp.name))
+        self.addCleanup(stop_diagnostics)
+        active_inst = self.instance("hist-active", history_id="c" * 32)
+        self.instance("hist-idle", active=False)
+        now = 500.0
+        active_inst.runtime.telemetry.clock = lambda: now
+        secret = "SENSITIVE_PROMPT_SHOULD_NOT_APPEAR"
+        for idx in range(105):
+            meter = active_inst.runtime.telemetry.start_turn(
+                provider="hist-active", session_key_raw=f"sess-{idx}", mode="tools",
+                model="gemini-test", effort="low",
+            )
+            meter.prompt_bytes = idx
+            meter.request_sent = True
+            meter.observe_usage(
+                {"usage": {"inputTokens": 100 + idx, "outputTokens": 20 + idx, "cachedReadTokens": 300}},
+                source="acp_terminal",
+            )
+            rec = meter.finish(status="ok")
+            rec["prompt"] = secret
+
+        with (
+            patch("agy_provider.sessions.Runtime.launch_info", side_effect=AssertionError("AGY request")),
+            patch("agy_provider.transport.AcpClient.request", side_effect=AssertionError("AGY request")),
+            patch("agy_provider.probe.probe", side_effect=AssertionError("probe")),
+        ):
+            status_resp = await self.service.handle("status")
+            self.assertEqual(len(status_resp["data"]["instances"][0]["recent_turns"]), 20)
+
+            turns_resp = await self.service.handle("turns")
+            self.assertEqual(turns_resp["status_code"], 200)
+            self.assertEqual(turns_resp["headers"]["Cache-Control"], "no-store")
+            payload = turns_resp["data"]
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["window"], {"hours": 24, "max_turns_per_instance": 100})
+            active_row, idle_row = payload["instances"]
+            self.assertEqual(active_row["total_turns"], 100)
+            self.assertEqual(len(active_row["turns"]), 100)
+            self.assertEqual(active_row["turns"][0]["prompt_bytes"], 104)
+            self.assertEqual(active_row["turns"][-1]["prompt_bytes"], 5)
+            self.assertEqual(active_row["turns"][0]["input_other"], 204)
+            self.assertEqual(active_row["turns"][0]["input_cached"], 300)
+            self.assertEqual(active_row["turns"][0]["output"], 124)
+            self.assertEqual(idle_row["runtime_state"], "configured")
+            self.assertEqual(idle_row["turns"], [])
+            self.assertNotIn(secret, json.dumps(payload, ensure_ascii=False))

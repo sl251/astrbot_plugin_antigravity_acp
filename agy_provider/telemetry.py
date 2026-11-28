@@ -628,12 +628,12 @@ class TelemetryTracker:
             self._emitted_times.append(self.clock())
             _emit_json_line(line)
 
-    def safe_recent_turns(self, limit: int = 20, *, now: float | None = None) -> list[dict]:
-        """Newest first; fresh, bounded, recursive allowlist, never raw history."""
+    def _safe_turns(self, limit: int, *, max_limit: int, now: float | None = None) -> list[dict]:
+        """最新记录在前；严格白名单裁剪并按时间窗口过滤，绝不暴露原始历史。"""
         self._prune_history(now)
-        limit = min(20, max(0, limit)) if type(limit) is int else 20
+        bounded = min(max_limit, max(0, limit)) if type(limit) is int else max_limit
         rows = []
-        for record in list(reversed(self.history))[:limit]:
+        for record in list(reversed(self.history))[:bounded]:
             row = {
                 "recorded_at": safe_timestamp(record.get("recorded_at")),
                 "model": safe_label(record.get("model")),
@@ -668,6 +668,14 @@ class TelemetryTracker:
                 }
             rows.append(row)
         return rows
+
+    def safe_recent_turns(self, limit: int = 20, *, now: float | None = None) -> list[dict]:
+        """Newest first; fresh, bounded, recursive allowlist, never raw history."""
+        return self._safe_turns(limit, max_limit=20, now=now)
+
+    def safe_turn_history(self, limit: int = MAX_HISTORY_TURNS, *, now: float | None = None) -> list[dict]:
+        """最新记录在前；返回近 24 小时窗口内最多 100 条脱敏历史记录，供按需详情视图读取。"""
+        return self._safe_turns(limit, max_limit=MAX_HISTORY_TURNS, now=now)
 
     def monitor_summary(self, *, now: float | None = None) -> dict:
         """Use /agy cost denominators, preserving unknown token buckets as null."""

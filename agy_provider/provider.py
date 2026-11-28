@@ -21,7 +21,7 @@ from .messages import digest, has_tool_image_markers, normalize, tool_continuati
 from .paths import plugin_data_root
 from .sessions import Runtime
 from .system_prompt import filter_host_capabilities
-from .telemetry import TurnMeter, provider_tag, safe_context, safe_label
+from .telemetry import MAX_HISTORY_TURNS, TurnMeter, provider_tag, safe_context, safe_label
 from .turn_history import HISTORY_ID, instance_tag
 from .tool_turn import chat_events
 from .tools import ToolSnapshot
@@ -162,13 +162,8 @@ def instance_cost_snapshots() -> list[dict]:
     return rows
 
 
-def instance_monitor_snapshots(manager) -> list[dict]:
-    """Synchronous snapshot on AstrBot's event loop: no await, I/O or AGY calls.
-
-    Only the manager's current instance counts. WeakSet also contains temporary
-    model-list providers and replaced instances, so it is unsuitable here.
-    """
-    rows = []
+def _iter_acp_instance_states(manager):
+    """枚举宿主已配置的所有 ACP 实例及其当前运行态解析结果。"""
     for config in list(manager.providers_config):
         merged = manager.get_merged_provider_config(config)
         if merged.get("type") != PROVIDER_TYPE:
@@ -185,6 +180,17 @@ def instance_monitor_snapshots(manager) -> list[dict]:
         effective_tools = settings.enable_tools and tools_mode in {"inherit", "tools"}
         model = safe_label(inst.get_model() if active else
                            merged.get("model") or (merged.get("model_config") or {}).get("model", ""))
+        yield provider_id, merged, inst, active, tools_mode, effective_tools, model
+
+
+def instance_monitor_snapshots(manager) -> list[dict]:
+    """Synchronous snapshot on AstrBot's event loop: no await, I/O or AGY calls.
+
+    Only the manager's current instance counts. WeakSet also contains temporary
+    model-list providers and replaced instances, so it is unsuitable here.
+    """
+    rows = []
+    for provider_id, merged, inst, active, tools_mode, effective_tools, model in _iter_acp_instance_states(manager):
         latest_context = {
             **safe_context({}), "source": "not_reported",
             "scope": "latest_live_session", "model": model,
@@ -214,6 +220,33 @@ def instance_monitor_snapshots(manager) -> list[dict]:
             "history_storage": inst.runtime.telemetry.history_storage if active else None,
             "latest_context": latest_context,
             "recent_turns": inst.runtime.telemetry.safe_recent_turns(20, now=history_now) if active else [],
+        })
+    return rows
+
+
+def instance_turn_history_snapshots(manager, limit: int = MAX_HISTORY_TURNS) -> list[dict]:
+    """同步导出各 ACP 实例近 24 小时脱敏历史调用明细（只读内存快照）。"""
+    rows = []
+    for provider_id, merged, inst, active, tools_mode, effective_tools, model in _iter_acp_instance_states(manager):
+        if active:
+            history_now = inst.runtime.telemetry.clock()
+            turns = inst.runtime.telemetry.safe_turn_history(limit, now=history_now)
+            total_turns = len(inst.runtime.telemetry.history)
+        else:
+            turns = []
+            total_turns = 0
+        rows.append({
+            "provider_id": safe_label(provider_id),
+            "provider_tag": provider_tag(provider_id),
+            "model": model,
+            "enabled": bool(merged.get("enable")),
+            "tools_mode": tools_mode,
+            "effective_mode": "tools" if effective_tools else "chat",
+            "tools_enabled": bool(effective_tools),
+            "runtime_state": "active" if active else "configured",
+            "history_storage": inst.runtime.telemetry.history_storage if active else None,
+            "total_turns": total_turns,
+            "turns": turns,
         })
     return rows
 
