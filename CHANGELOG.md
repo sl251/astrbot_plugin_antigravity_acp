@@ -1,5 +1,9 @@
 # 变更记录
 
+## 未发布
+
+- **纯聊天与无工具路径改用默认 Agent + `AGENTS.md`（#52）**：自 Antigravity CLI `1.5.17` 起自定义 Agent（`--agent`、插件 `agents`）按 4 倍速率消耗 Gemini 额度。现在纯聊天（`chat` / `enable_tools=false` / `tool_choice=none` / 空工具集）、无工具收尾与超时恢复及 `probe` 自检均不再生成 `astrbot-chat.md` 或传入 `--agent astrbot-chat`，统一改用默认 Agent 并将人设与无工具护栏写入 `workspace/AGENTS.md`；`settings.json` 保持 `toolPermission=strict` 与 `transport.py` `BuiltinDenied` 拒止不变，`discover()` 移除 `--agent` 必选限制，`agy_customizations_mode=minimal` 统一覆盖全部默认 Agent 会话（默认仍为 `inherit`）。
+
 ## 0.9.0（2026-11-28）
 
 - **带图工具结果的续轮校验与 MCP 图片回传（#48 / [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49)）**：AstrBot 4.29.4 在工具返回图片时，会在 `role=tool` 结果之后再追加一条承载图片的 `role=user` 消息。旧版只接受「末尾恰好一条工具结果」，带图的续轮一律抛 `TOOL_HISTORY` 并切到 fallback，用户收到与图片无关的回复。现在闭合交换可以是 `assistant / tool / user(图片)` 三段且必须位于尾部：标注文本须与本次工具名及文本结果中的缓存路径逐一匹配、路径保序、`id` 只允许等于 `path`，其余历史仍逐条对照已审计记录；带图续轮同样经过 `TOOL_STALE` 迟到结果拦截。

@@ -22,7 +22,7 @@ from agy_provider.config import Settings
 from agy_provider.errors import AgyError
 from agy_provider.host_compat import install_host_compat, uninstall_host_compat
 from agy_provider.messages import ConversationInput, normalize
-from agy_provider.process import LaunchInfo
+from agy_provider.process import LaunchInfo, launch_args as real_launch_args
 from agy_provider.sessions import Runtime, decide_reuse
 from agy_provider.tools import ToolSnapshot
 from agy_provider.tool_turn import ToolTurn
@@ -66,11 +66,18 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         provider = module.AgyProvider({"id": "p", "model": "gemini-test"}, {})
         self.addAsyncCleanup(provider.terminate)
 
-        def launch(info, home, *, use_default_agent, customizations_mode):
+        def launch(info, home, *, customizations_mode):
             fixtures = Path(__file__).parent
-            if use_default_agent:
+            real_args = real_launch_args(info, home, customizations_mode=customizations_mode)
+            self.assertNotIn("--agent", real_args)
+            agents_text = (home / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+            tools_active = "No tools are available in this session." not in agents_text
+            launch.tools_modes.append(tools_active)
+            if tools_active:
                 return [sys.executable, str(fixtures / "fake_tool_cli.py")]
             return [sys.executable, str(fixtures / "fake_cli.py"), "echo"]
+
+        launch.tools_modes = []
 
         self.log.write_text("", encoding="utf-8")
         launches = self.enterContext(patch("agy_provider.sessions.launch_args", side_effect=launch))
@@ -266,7 +273,7 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(old_client.alive)
         self.assertIsNone(provider.runtime.sessions[key].broker)
         await self.assert_late_result_rejected(runner, fallback)
-        self.assertEqual([c.kwargs["use_default_agent"] for c in launches.call_args_list], [True, False])
+        self.assertEqual(launches.side_effect.tools_modes, [True, False])
         prompts = self.prompts(log)
         self.assertEqual(len(prompts), 1)
         self.assertIn("completed tool result", "".join(prompts[0]["texts"]))
@@ -541,7 +548,7 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(old_client.alive)
         self.assertIsNone(provider.runtime.sessions[key].broker)
         await self.assert_late_result_rejected(runner, fallback)
-        self.assertEqual([c.kwargs["use_default_agent"] for c in launches.call_args_list], [True, False])
+        self.assertEqual(launches.side_effect.tools_modes, [True, False])
         prompts = self.prompts(log)
         self.assertEqual(len(prompts), 1)
         self.assertEqual(prompts[0]["block_types"].count("image"), 1)
@@ -568,7 +575,7 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(provider.runtime.turns)
         self.assertIsNone(next(iter(provider.runtime.sessions.values())).broker)
         self.assertEqual(fallback.calls, 0)
-        self.assertEqual([c.kwargs["use_default_agent"] for c in launches.call_args_list], [True, False, False])
+        self.assertEqual(launches.side_effect.tools_modes, [True, False, False])
         self.assertEqual([event["block_types"].count("image") for event in self.prompts(log)], [0, 1])
 
     async def test_max_steps_retires_pending_tool_prompt_and_summarizes_without_tools(self):
@@ -582,7 +589,7 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(provider.runtime.turns)
         self.assertTrue(old_turn.finished)
         self.assertEqual(provider.runtime.tool_outcomes[call.id], "unknown")
-        self.assertEqual([c.kwargs["use_default_agent"] for c in launches.call_args_list], [True, False])
+        self.assertEqual(launches.side_effect.tools_modes, [True, False])
         self.assertIsNone(next(iter(provider.runtime.sessions.values())).broker)
         prompts = self.prompts(log)
         self.assertEqual(len(prompts), 1)
@@ -609,7 +616,7 @@ class ToolPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[TOOL_STALE]", repeated[-1].completion_text)
         self.assertEqual(fallback.calls, 0)
         self.assertFalse(provider.runtime.turns)
-        self.assertEqual([c.kwargs["use_default_agent"] for c in launches.call_args_list], [True, False, False])
+        self.assertEqual(launches.side_effect.tools_modes, [True, False, False])
         self.assertIsNone(next(iter(provider.runtime.sessions.values())).broker)
         prompts = self.prompts(log)
         self.assertEqual(len(prompts), 2)

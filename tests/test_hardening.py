@@ -74,11 +74,13 @@ class OccupancyTests(unittest.TestCase):
                 Settings.from_dict({key: 0})
         info = LaunchInfo("fake", "1.5.9", False, True)
         home = Path("session")
-        self.assertNotIn("--include-default-customizations=false", launch_args(info, home, True))
-        self.assertIn("--include-default-customizations=false", launch_args(info, home, True, customizations_mode="minimal"))
-        self.assertIn("--agent", launch_args(info, home, customizations_mode="minimal"))
+        self.assertNotIn("--agent", launch_args(info, home))
+        self.assertNotIn("--include-default-customizations=false", launch_args(info, home))
+        minimal = launch_args(info, home, customizations_mode="minimal")
+        self.assertIn("--include-default-customizations=false", minimal)
+        self.assertNotIn("--agent", minimal)
         with self.assertRaises(AgyError) as caught:
-            launch_args(LaunchInfo("fake", "old", False), home, True, customizations_mode="minimal")
+            launch_args(LaunchInfo("fake", "old", False), home, customizations_mode="minimal")
         self.assertEqual(caught.exception.code, "UNSUPPORTED")
 
 

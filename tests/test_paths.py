@@ -13,7 +13,7 @@ from agy_provider.config import Settings
 from agy_provider.login import LoginFlow
 from agy_provider.paths import cleanup_stale_dirs, windows_long_path
 from agy_provider.probe import probe
-from agy_provider.process import AGENT_NAME, LaunchInfo, launch_args, make_home
+from agy_provider.process import LaunchInfo, launch_args, make_home
 from agy_provider.sessions import Runtime, Session
 
 
@@ -94,9 +94,8 @@ class WindowsPathTests(unittest.IsolatedAsyncioTestCase):
 
     def root_for_agent_length(self, length):
         # mkdtemp's session- prefix plus eight random characters, followed by
-        # the custom agent file. Keep each component well below its own limit.
-        tail = Path("session-xxxxxxxx") / "config" / "plugins" / AGENT_NAME
-        tail = tail / "agents" / f"{AGENT_NAME}.md"
+        # workspace/AGENTS.md. Keep each component well below its own limit.
+        tail = Path("session-xxxxxxxx") / "workspace" / "AGENTS.md"
         target = length - len(str(tail)) - 1
         root = self.base
         if target - len(str(root)) < 2:
@@ -120,16 +119,18 @@ class WindowsPathTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(length=length):
                 root = self.root_for_agent_length(length)
                 home = make_home(root, "test persona")
-                agent = home / "config" / "plugins" / AGENT_NAME
-                agent = agent / "agents" / f"{AGENT_NAME}.md"
+                agents_md = home / "workspace" / "AGENTS.md"
                 self.assertTrue(str(home).startswith("\\\\?\\"))
                 prefix_length = len(str(windows_long_path(root))) - len(str(root))
-                self.assertEqual(len(str(agent)) - prefix_length, length)
-                self.assertIn("test persona", agent.read_text(encoding="utf-8"))
-                self.assertTrue((agent.parent.parent / "plugin.json").is_file())
+                self.assertEqual(len(str(agents_md)) - prefix_length, length)
+                content = agents_md.read_text(encoding="utf-8")
+                self.assertIn("test persona", content)
+                self.assertIn("No tools are available in this session.", content)
+                self.assertFalse((home / "config").exists())
                 self.assertTrue((home / "agy" / "settings.json").is_file())
                 args = launch_args(LaunchInfo("agy.exe", "1.5.9", False), home)
                 self.assertEqual(args[args.index("--gemini-dir") + 1], str(home))
+                self.assertNotIn("--agent", args)
                 shutil.rmtree(home)
                 self.assertFalse(home.exists())
 

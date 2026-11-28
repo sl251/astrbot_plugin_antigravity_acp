@@ -165,7 +165,7 @@ class AcpTests(unittest.IsolatedAsyncioTestCase):
         binary.parent.mkdir(parents=True)
         binary.touch()
         capture = AsyncMock(
-            side_effect=["agy 1.5.2", "--gemini-dir --app-data-dir --agent"]
+            side_effect=["agy 1.5.19", "--gemini-dir --app-data-dir"]
         )
         with (
             patch.dict(os.environ, {"LOCALAPPDATA": str(self.root)}),

@@ -43,8 +43,8 @@ class FailureGuardTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-empty", clock=lambda: now[0])
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "empty", *args[1:]]
 
         req = normalize([], "你好", "sys", [], settings.history_bytes)
@@ -243,8 +243,8 @@ class FailureGuardTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-nosucc")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         req = normalize([], "重复问候", "sys", [], settings.history_bytes)
