@@ -884,12 +884,17 @@ class AgyProvider(Provider):
             # Runtime retired the failed native session and recorded its cost.
             # Deliver a local terminal message; a new user turn can proceed.
             notice = getattr(exc, "user_notice", None)
+            no_tools = exc.code == "TOOLS_DISABLED" or not (snapshot.tools or allow_builtins)
             if notice:
                 # With tools disabled no AstrBot tool is offered through this plugin.
-                notice += ("你可以继续提问。" if exc.code == "TOOLS_DISABLED"
+                notice += ("你可以继续提问。" if no_tools
                            else "你可以继续提问，或使用 AstrBot 已启用的工具。")
             else:
-                notice = "本轮请求了受限的 CLI 内置工具，无法继续取得结果。你可以继续提问，或使用 AstrBot 已启用的工具。"
+                notice = (
+                    "本轮请求了受限的 CLI 内置工具，无法继续取得结果。你可以继续提问。"
+                    if no_tools else
+                    "本轮请求了受限的 CLI 内置工具，无法继续取得结果。你可以继续提问，或使用 AstrBot 已启用的工具。"
+                )
             done_seen = True
             if streaming:
                 yield LLMResponse(role="assistant", completion_text=notice, is_chunk=True)

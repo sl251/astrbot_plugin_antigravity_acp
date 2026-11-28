@@ -69,6 +69,11 @@ def next_step(report):
         if report.get("minimal_tools_status") == "unsupported":
             return "基础检查通过，但当前 CLI 不支持组件精简参数。请恢复 agy_customizations_mode=inherit。"
         return "环境与模型目录检查通过。选择模型并保存即可配置；此检查没有发送对话。"
+    if (
+        report.get("error_code") == "UNSUPPORTED"
+        and report.get("minimal_tools_status") == "unsupported"
+    ):
+        return "当前 CLI 不支持组件精简参数（--include-default-customizations）。请恢复 agy_customizations_mode=inherit 并重载后重新检测。"
     return HINTS.get(report.get("error_code"), "请重新检测；仍失败时用 /agy doctor 获取脱敏诊断。")
 
 

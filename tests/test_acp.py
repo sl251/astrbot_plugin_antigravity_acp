@@ -250,3 +250,60 @@ class AcpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(third.version, "agy 1.6.0")
             self.assertFalse(third.supports_login)
             self.assertEqual(mock_capture.await_count, 4)
+
+    async def test_discover_accepts_help_without_agent_flag(self):
+        binary = self.root / ("agy.exe" if os.name == "nt" else "agy")
+        binary.write_bytes(b"binary-no-agent")
+        if os.name == "posix":
+            binary.chmod(0o755)
+        mock_capture = AsyncMock(
+            side_effect=[
+                "agy 1.5.19",
+                "--gemini-dir --app-data-dir --include-default-customizations --disable-telemetry --login",
+            ]
+        )
+        with patch("agy_provider.process.capture", mock_capture):
+            info = await discover(Settings(command=str(binary)))
+        self.assertEqual(info.version, "agy 1.5.19")
+        self.assertTrue(info.include_default_customizations)
+        self.assertTrue(info.disable_telemetry)
+        self.assertTrue(info.supports_login)
+        self.assertEqual(mock_capture.await_count, 2)
+
+    async def test_probe_minimal_passes_flag_and_blocks_unsupported_cli(self):
+        from agy_provider.process import launch_args as real_launch_args
+
+        seen_args = []
+
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
+            seen_args.append(args)
+            return [sys.executable, str(FIXTURE), "probe", *args[1:]]
+
+        minimal_settings = Settings(
+            auth_bridge=False, startup_timeout=5, agy_customizations_mode="minimal"
+        )
+        with (
+            patch(
+                "agy_provider.probe.discover",
+                AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.19", False, True)),
+            ),
+            patch("agy_provider.probe.launch_args", side_effect=fake_launch),
+        ):
+            supported = await probe(minimal_settings, root=self.root, details=True)
+        self.assertEqual(supported["status"], "passed")
+        self.assertEqual(supported["minimal_tools_status"], "flag_available_unverified")
+        self.assertEqual(len(seen_args), 1)
+        self.assertIn("--include-default-customizations=false", seen_args[0])
+        self.assertNotIn("--agent", seen_args[0])
+
+        with patch(
+            "agy_provider.probe.discover",
+            AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False, False)),
+        ):
+            unsupported = await probe(minimal_settings, root=self.root, details=True)
+        self.assertEqual(unsupported["status"], "blocked")
+        self.assertEqual(unsupported["stage"], "initialize")
+        self.assertEqual(unsupported["error_code"], "UNSUPPORTED")
+        self.assertEqual(unsupported["minimal_tools_status"], "unsupported")
+        self.assertEqual(list(self.root.iterdir()), [])

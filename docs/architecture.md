@@ -42,7 +42,7 @@ AstrBot 4.29.4 可在一条 `role=tool` 结果后附一条图片 `role=user` 消
 
 - `AcpClient._permission_option()` 仅在活跃工具 prompt 内，对当前快照严格映射的 `mcp_astrbot_<wire_name>`、已观察到且名称/ID/状态匹配的调用，选择唯一有效、未消费的 `allow_once`。登记早于回包，终态立即关闭窗口。`ToolBroker.dispatch()` 再校验调用、参数、预算和会话，`ToolTurn` 交宿主审批执行并审计回填。
 - [tools.py](../agy_provider/tools.py) 将 `ToolSnapshot.to_host_schema` 与 `tools[].inputSchema` 分开复制，两份皆参与指纹。模型 wire 可为缺失 array `items` 补 string（含组合和联合类型）；桥执行使用原始 schema，保留原本合法数组，显式 string 仍约束元素。
-- [builtin_tools.py](../agy_provider/builtin_tools.py) 的 `BUILTIN_SPECS` 是原生工具注册表。`provider.py`、`sessions.py` 和 `process.py` 让纯聊天与受控原生工具统一使用默认 agent + `workspace/AGENTS.md`（避免 `--agent` 自定义智能体在 CLI ≥ 1.5.17 下触发 4 倍额度消耗）；`chat` 或 `tool_choice=none` 不挂载工具桥（`mcpServers: []`，无 relay 子进程）并保持无工具护栏与严格权限拒止。具体版本、许可与共享预算只在[工具策略](api.md#工具策略)维护。
+- [builtin_tools.py](../agy_provider/builtin_tools.py) 的 `BUILTIN_SPECS` 是原生工具注册表。`provider.py`、`sessions.py` 和 `process.py` 让纯聊天与受控原生工具统一使用默认 agent + `workspace/AGENTS.md`（避免 `--agent` 自定义智能体在 CLI ≥ 1.5.17 下触发 4 倍额度消耗）；`chat` 或 `tool_choice=none` 不挂载工具桥（`mcpServers: []`，无 relay 子进程），由无工具护栏、严格权限拒绝与 `tool_broker is None` 的即时中止保护（未登记内置工具同样标记 `no_retry` / `no_fallback`）。因默认 agent 会向模型声明原生工具，对 `search_web` 等免事前审批的内置工具同样受限于护栏与事后中止（发现时联网请求可能已发出），不再具备旧版 `tools: []` 声明级隔离。具体版本、许可与共享预算只在[工具策略](api.md#工具策略)维护。
 
 ## system 过滤与 429 的证据边界
 
@@ -74,7 +74,7 @@ AstrBot 4.29.4 可在一条 `role=tool` 结果后附一条图片 `role=user` 消
 
 - `command` 留空自动发现，显式值为原生可执行绝对路径。`proxy_mode=inherit/custom/direct` 中 custom 仅注入 CLI 子进程。隔离 `--gemini-dir`、`--app-data-dir` 和工作目录。POSIX 使用进程组，Windows 用 Job Object 并保留 `taskkill /T` 降级。进程启动与 Job Object 绑定并非原子操作，宿主被强杀后仍可能残留子进程。
 - `enable_tools`、`enable_images` 默认关闭。工具模式 `inherit/chat/tools` 受总闸控制；MCP 需实际 ToolSet、宿主会话身份及取消信号，图片需宿主 `image` 模态及 CLI 能力。当前图片遵守 [media.py](../agy_provider/media.py) 的格式/CRC、根目录、SSRF、大小和像素预算。
-- `agy_thought_level` 调用覆盖优先于实例设置，`default` 继承全局，全局也为 `default` 则使用 CLI 默认。可用模型/选项由 [models.py](../agy_provider/models.py) 核验。`agy_customizations_mode=minimal` 在支持该参数的默认 agent（覆盖纯聊天与工具会话）上附加 `--include-default-customizations=false`，真实 A/B 另验。
+- `agy_thought_level` 调用覆盖优先于实例设置，`default` 继承全局，全局也为 `default` 则使用 CLI 默认。可用模型/选项由 [models.py](../agy_provider/models.py) 核验。`agy_customizations_mode=minimal` 在支持该参数的默认 agent（覆盖纯聊天、工具会话与 `probe` 自检）上附加 `--include-default-customizations=false`，不支持时自检与会话均报 `UNSUPPORTED`，真实 A/B 另验。
 
 ## 故障定位索引
 

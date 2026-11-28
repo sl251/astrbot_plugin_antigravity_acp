@@ -71,6 +71,16 @@ class DiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             ("CLI_WRAPPER", "原生可执行文件"),
         ):
             self.assertIn(word, next_step({"status": "blocked", "error_code": code}))
+        self.assertIn(
+            "agy_customizations_mode=inherit",
+            next_step(
+                {
+                    "status": "blocked",
+                    "error_code": "UNSUPPORTED",
+                    "minimal_tools_status": "unsupported",
+                }
+            ),
+        )
 
     async def test_closed_stdout_without_process_exit_is_not_startup_exit(self):
         client = AcpClient(Settings())
