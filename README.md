@@ -9,7 +9,7 @@
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.29.4%2C%3C4.30-orange)
 [![主分支版本](https://img.shields.io/badge/main-%E7%89%88%E6%9C%AC-brightgreen)](metadata.yaml)
 
-通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，把 Antigravity 模型安全、稳定地接入 AstrBot，作为日常对话主力。
+通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，把 Antigravity 模型接入 AstrBot，作为日常对话主力。
 
 > 💡 **主分支 v0.9.1（2026-11-28）**：纯聊天与无工具路径改用官方 CLI 的默认 Agent + `AGENTS.md`，不再使用 `--agent` 自定义智能体，避免 CLI 1.5.17+ 把这类会话按 4 倍计入额度（[#52](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/52) / [PR #53](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/53)）；跟进加固自检透传、无工具路径防重放与护栏（[PR #54](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/54)）。详见 [CHANGELOG](CHANGELOG.md#0912026-11-28)。
 
@@ -35,10 +35,12 @@
 
 折腾过反代、抓包提取 OAuth Token、或者接过野生号池的朋友应该都懂：**账号风控是玄学，哪天睡醒号就没了**。
 
-做这个插件最大的初衷，就是因为**被 Google 杀号杀怕了**。为了稳稳用上官方模型，本插件坚持**纯合规路线**：
+做这个插件最大的初衷，就是因为**被 Google 杀号杀怕了**。所以这个插件选择直接走官方 CLI 和 ACP，而不是反代：
 - **不碰逆向，不写黑科技**：只调用本机官方 `agy` 客户端，走标准 stdio 管道和 ACP 协议通信。
 - **免 API Key，零中转**：本地客户端自带鉴权，不需要搭建任何第三方 HTTP 反代服务，登录即用。
 - **权限安全默认熔断**：`agy` 原生拥有本地文件与命令执行能力；为防止提示词注入越权破坏系统，插件默认拒绝所有内置工具，仅在开启工具总闸后支持于 Linux CLI `1.5.17` / `1.5.18` 按需单次授权读取隔离会话工作区顶层 `.txt`（或独立开启实验性 `search_web`），文件编辑/写入、终端与浏览器保持锁定拒绝，其余外部工具调用交由 AstrBot 自身权限体系托管。
+
+近期社区也有 ACP 客户端用户反馈账号受限，具体原因尚不明确。官方协议不代表所有接入场景都获得了授权，使用前建议了解 [服务条款](https://antigravity.google/terms) 和 [官方 FAQ](https://antigravity.google/docs/faq)。
 
 ### 📌 功能边界一览
 
@@ -53,7 +55,7 @@
 
 ## 2. 核心特性
 
-- **官方通道直连**：原生 stdio 管道通信，享受 Google 官方客户端的稳定连接与低风控保障（这不构成账号安全或上游可用性的绝对保证）。
+- **官方通道直连**：通过官方 CLI 进行原生 stdio 管道通信，无需额外搭建反代服务。
 - **双模能力支持**：支持多模态识图（Vision）以及内置 MCP 桥接工具调用（Tool Use），可无缝调用 AstrBot 的各种技能插件。
 - **可视化运行监控与管理面板**：运行监控、模型管理、环境与认证、工具权限页签协同，含会话池分段条、环形统计、Token 堆叠与延迟图，支持原位编辑、漂移修复、受控默认迁移及主题切换；路由和失败诊断为只读展示，不额外发起模型请求；账号额度按需刷新，近 24 小时脱敏请求明细跨重载保存。
 - **智能防雪崩**：具备 429 限流快速熔断、错误提前中断与疑似压缩后的上下文退役机制，避免异常重试浪费资源。
@@ -107,7 +109,7 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
   - `/agy doctor`：进行无损连通性与会话自检。
   - `/agy cost` 查看各实例近 24 小时的缓存复用、Token 与进程池摘要。已结算的脱敏统计可跨插件重载恢复。
   - `/agy quota` 手动查询官方 CLI 账号额度，`/agy usage [30|90|365]` 查看本地每日用量，`/agy help` 列出全部指令。
-  - 进入运行监控时按需更新账号额度，60 秒内优先使用缓存。也可点击「刷新额度」立即查询。
+  - 进入运行监控时按需更新账号额度，60 秒内优先使用缓存。也可点击「刷新额度」立即查询。剩余额度通过官方 CLI 的 `/usage` 获取，目前 ACP 尚未提供原生额度查询接口，该方式在第三方客户端中的支持情况仍待官方确认。
   - QQ 私聊中 `/new` 正常、`/agy cost` 被当成聊天时，请在该会话实际使用的 AstrBot 配置「可用插件」中勾选 `astrbot_plugin_antigravity_acp` 并保存，再发 `/agy help`。
 - **工具跑得久之后出现 `TOOL_STALE` / `TOOL_TIMEOUT`，或回复与工具结果无关**：确认已加载含 #45 修复的版本。宿主迟到的工具结果满足会话与原调用校验时可用于一次无工具生成，禁止重发工具。详见[宿主工具执行超时后的回填](docs/troubleshooting.md#宿主工具执行超时后的回填)。
 - **同一会话连续出现 `history_rewrite`**：升级至含 #33 修复的 v0.8.2 后，在同一会话连续发送消息，检查后续轮是否显示 `reused=true`。真实历史编辑等情况仍会触发重建。详情见 [会话复用排障](docs/troubleshooting.md#会话复用与历史重写)。
