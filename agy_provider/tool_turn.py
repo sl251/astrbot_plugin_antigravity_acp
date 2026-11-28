@@ -4,6 +4,7 @@ import asyncio
 import copy
 
 from .errors import AgyError
+from .messages import tool_continuation_tail
 from .transport import Event
 
 
@@ -22,10 +23,13 @@ def _continuation_exchange(messages, baseline, call, text):
         )
         if message.get("role") == "tool" and message.get("tool_call_id") == call.id:
             results_at.append(index)
+    tail = tool_continuation_tail(messages)
     if (
-        calls_at != [len(messages) - 2]
-        or results_at != [len(messages) - 1]
-        or messages[-2] != call.assistant_message(text)
+        tail is None
+        or tail.tool_index < 1
+        or calls_at != [tail.tool_index - 1]
+        or results_at != [tail.tool_index]
+        or messages[tail.tool_index - 1] != call.assistant_message(text)
     ):
         raise AgyError(
             "TOOL_HISTORY", "工具续轮缺少唯一、完整且匹配的已审计调用/结果。"
@@ -41,7 +45,8 @@ def _continuation_exchange(messages, baseline, call, text):
         for message in baseline
         if message["role"] == "tool"
     }
-    for message in messages[:-2]:
+    exchange_start = tail.tool_index - 1
+    for message in messages[:exchange_start]:
         if any(
             item != known_calls.get(item["id"])
             for item in message.get("tool_calls", [])
@@ -50,7 +55,7 @@ def _continuation_exchange(messages, baseline, call, text):
             and message != known_results.get(message.get("tool_call_id"))
         ):
             raise AgyError("TOOL_HISTORY", "工具续轮混入了未审计或被改写的工具记录。")
-    return messages[-2:]
+    return messages[exchange_start:]
 
 
 class ToolTurn:
@@ -275,11 +280,17 @@ class ToolTurn:
         exchange = _continuation_exchange(
             request.messages, self.request.messages, call, "".join(self.segment)
         )
-        self.waiting["broker"].resolve(call.id, exchange[1]["content"])
+        broker = self.waiting["broker"]
+        if len(exchange) == 3:
+            attachments = exchange[2]["content"]
+            if not client.capabilities.get("promptCapabilities", {}).get("image"):
+                attachments = [part for part in attachments if part["type"] == "text"]
+            broker.resolve(call.id, exchange[1]["content"], attachments=attachments)
+        else:
+            broker.resolve(call.id, exchange[1]["content"])
         self.request.consumed_text += "".join(self.segment)
-        # Track what the retained ACP prompt actually saw. If the host rewrote
-        # its prefix, the next user turn must rebuild instead of falsely reusing
-        # a session whose context never received those edits.
+        # Record the full host exchange including image identities. Host prefix
+        # changes still require a rebuild on the next user turn.
         self.request.messages.extend(copy.deepcopy(exchange))
         self.resume.set()
 
@@ -348,10 +359,11 @@ async def chat_events(
     finalizing: bool = False,
 ):
     """Per-entry lock releases on host handoff; retained job owns original lease."""
-    result_tail = request.messages[-1]["role"] == "tool"
+    tail = tool_continuation_tail(request.messages)
+    result_tail = tail is not None
     session = runtime.sessions.get(key)
     late_tool_result = result_tail and (
-        request.messages[-1]["tool_call_id"] in runtime.tool_timeouts
+        tail.call_id in runtime.tool_timeouts
         or (session is not None and session.timed_out_tool is not None)
     )
     if late_tool_result and (

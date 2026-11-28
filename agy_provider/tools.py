@@ -456,10 +456,11 @@ class ToolBroker:
                 for child in (work, eof):
                     if child:
                         child.cancel()
+                # Broker shutdown can cancel this task while it joins its children.
+                writer.close()
                 await asyncio.gather(
                     *(t for t in (work, eof) if t), return_exceptions=True
                 )
-                writer.close()
                 try:
                     await asyncio.wait_for(writer.wait_closed(), 2)
                 except (OSError, TimeoutError):
@@ -587,15 +588,46 @@ class ToolBroker:
                 {"content": [{"type": "text", "text": code}], "isError": True}
             )
 
-    def resolve(self, call_id, content):
+    def resolve(self, call_id, content, *, attachments: list[dict] | None = None):
         call = self.pending.get(call_id)
         if self.closed or call is None or not call.delivered or call.future.done():
             raise AgyError("TOOL_STALE", "工具结果迟到或重复。")
-        self.result_bytes += self.check_result(content)
+        blocks, text_size = self.build_result_blocks(content, attachments=attachments)
+        self.result_bytes += text_size
         call.state = "completed"
-        call.future.set_result(
-            {"content": [{"type": "text", "text": content}], "isError": False}
-        )
+        call.future.set_result({"content": blocks, "isError": False})
+
+    def build_result_blocks(self, content, *, attachments: list[dict] | None = None):
+        text_size = self.check_result(content)
+        blocks = [{"type": "text", "text": content}]
+        if attachments is not None and not isinstance(attachments, list):
+            raise AgyError("TOOL_RESULT", "工具附件必须为内容块列表。")
+        for part in attachments or []:
+            if not isinstance(part, dict):
+                raise AgyError("TOOL_RESULT", "工具附件块无效。")
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+                text = part["text"]
+                validate_json(text, "TOOL_RESULT")
+                text_size += len(text.encode())
+                blocks.append({"type": "text", "text": text})
+            elif (
+                part.get("type") == "image"
+                and set(part) == {"type", "mimeType", "data"}
+                and part["mimeType"] in ("image/png", "image/jpeg")
+                and isinstance(part["data"], str)
+                and part["data"]
+            ):
+                validate_json(part["data"], "TOOL_RESULT")
+                blocks.append(dict(part))
+            else:
+                raise AgyError("TOOL_RESULT", "工具附件块格式无效。")
+        if self.result_bytes + text_size > self.settings.tool_result_bytes:
+            raise AgyError("TOOL_RESULT_LIMIT", "工具文本结果超过本轮总字节预算；不会截断。")
+        # Match the socket reply encoding and reserve space for the MCP envelope.
+        wire = json.dumps({"result": {"content": blocks, "isError": False}}, ensure_ascii=False)
+        if len(wire.encode()) + 1 > 15 * FRAME_LIMIT:
+            raise AgyError("TOOL_RESULT_LIMIT", "工具结果超过本地桥单帧上限；不会截断。")
+        return blocks, text_size
 
     def check_result(self, content):
         if not isinstance(content, str):

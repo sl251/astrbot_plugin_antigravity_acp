@@ -22,6 +22,7 @@ from .messages import (
     attach_transient_data,
     digest,
     prompt_blocks,
+    tool_continuation_tail,
 )
 from .models import catalog, select
 from .paths import remove_tree_robust, windows_long_path
@@ -554,34 +555,36 @@ class Runtime:
             )
 
         async with self.lease(key or uuid.uuid4().hex, temporary) as session:
-            result_tail = request.messages[-1]["role"] == "tool"
+            tail = tool_continuation_tail(request.messages)
             if late_tool_result:
                 timed_out_tool = session.timed_out_tool
                 if (
-                    timed_out_tool is None
+                    tail is None
+                    or timed_out_tool is None
                     or timed_out_tool.signal is not host_signal
                     or timed_out_tool.signal.is_set()
                     or time.monotonic() >= timed_out_tool.expires_at
                     or not session.matches_live_context(request, model, effort)
                     or request.source_revision != timed_out_tool.source_revision
                     or request.transient_hash != timed_out_tool.transient_hash
-                    or request.hashes[:-1] != timed_out_tool.history_hashes
+                    or request.hashes[:tail.tool_index] != timed_out_tool.history_hashes
                     or session.broker is None
                 ):
                     raise AgyError(
                         "TOOL_TIMEOUT", "原工具执行已超时，迟到结果已失效或与原工具轮不匹配。",
                         no_retry=True, no_fallback=True,
                     )
-                session.broker.check_result(request.messages[-1]["content"])
-            elif finalizing and host_signal is not None and result_tail:
+                session.broker.check_result(request.messages[tail.tool_index]["content"])
+            elif finalizing and host_signal is not None and tail is not None:
                 # Accept only one closed exchange appended to the completed
                 # no-tool finalization of this live host run, as quoted history.
                 if (
                     session.finalization_signal is not host_signal
                     or not session.matches_live_context(request, model, effort)
-                    or not request.messages[-2].get("tool_calls")
-                    or request.hashes[:-2] != session.host_expected[:-1]
-                    or request.messages[-1]["tool_call_id"] in self.tool_outcomes
+                    or tail.tool_index < 1
+                    or not request.messages[tail.tool_index - 1].get("tool_calls")
+                    or request.hashes[:tail.tool_index - 1] != session.host_expected[:-1]
+                    or tail.call_id in self.tool_outcomes
                 ):
                     raise AgyError("TOOL_STALE", "无工具收尾已过期或历史不匹配，拒绝旧工具结果。")
             session.finalization_signal = None
@@ -791,7 +794,7 @@ class Runtime:
                             )
                             sent_hashes = request.hashes
                             session.host_expected = sent_hashes + [assistant_hash]
-                            if finalizing and not result_tail:
+                            if finalizing and tail is None:
                                 session.finalization_signal = host_signal
                             if request.persisted_user is not None:
                                 index, persisted_hash = request.persisted_user

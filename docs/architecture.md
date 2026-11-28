@@ -21,7 +21,7 @@ flowchart LR
 ## 会话、历史与防重放
 
 - [sessions.py](../agy_provider/sessions.py) 用 Provider、宿主会话和 conversation 确定身份。活跃工具轮等待回填时，同会话新请求按 `queue_timeout` 等待。`compare_history()` 用 `host_expected` 核验宿主历史，`sent_window` 单独记录实际发送窗口。相同尾部不足以证明可复用。
-- [messages.py](../agy_provider/messages.py) 将当前输入与有界历史分开。确认的 `_no_save` 临时文本照常发送，只从预期回放排除。宿主序列化丢标记时，仅在原始附加内容全为文本且位置、顺序和内容吻合时恢复。默认 `strict`，`structured` 只接受验证过的 `agy_context_parts`。模型、档位、稳定 system、工具指纹或历史变化均可能重建。历史图片经 `media.py` 轻量元数据或语法检查后保留哈希占位，不占当前附件预算。只有当前最新用户轮图片经过完整校验后随请求发送。
+- [messages.py](../agy_provider/messages.py) 将当前输入与有界历史分开。确认的 `_no_save` 临时文本照常发送，只从预期回放排除。宿主序列化丢标记时，仅在原始附加内容全为文本且位置、顺序和内容吻合时恢复。默认 `strict`，`structured` 只接受验证过的 `agy_context_parts`。模型、档位、稳定 system、工具指纹或历史变化均可能重建。历史图片经 `media.py` 轻量元数据或语法检查后保留哈希占位，不占当前附件预算。当前用户轮图片及工具续轮附图均须通过完整媒体校验。
 - [context_usage.py](../agy_provider/context_usage.py) 用同一窗口的有效 `used/size` 判断疑似压缩，配置阈值命中后在本轮及工具回填完成后退休。上下文占用与计费 usage 各有独立来源。
 - Provider 在可见正文、内置工具已记为使用、工具交接或工具结果续轮后失败时标记 `no_retry` 和 `no_fallback`。[host_compat.py](../agy_provider/host_compat.py) 包装受支持的 runner，阻止后续 fallback Provider 被调用。仅思考/进度且未交接、未执行工具的失败可保留宿主显式 fallback 资格。
 
@@ -29,12 +29,14 @@ flowchart LR
 
 普通 MCP 续轮通过 `ToolTurn.accept()` 审计调用和结果，然后继续同一个 ACP prompt。隔离的两条无工具路径由 `chat_events()` 分派。
 
+AstrBot 4.29.4 可在一条 `role=tool` 结果后附一条图片 `role=user` 消息。标注须匹配本次工具名及文本结果中同序的缓存路径，每张图片须为 data URL。完整交换计入会话基线，跨轮图片以哈希对齐。CLI 声明图片能力时，MCP 结果附带标注与已验证的 PNG/JPEG，否则仅附标注。文本和标注计入 `tool_result_bytes`，图片使用媒体预算，桥响应上限为 15 MiB。
+
 | 触发 | 执行与边界 |
 | --- | --- |
 | 已交接工具超过 `tool_execution_timeout` | `ToolBroker.dispatch()` 置 `execution_timed_out` 并抛出 `TOOL_TIMEOUT`，由 `ToolTurn` 关闭 `Runtime.stream()` 以结束原 prompt。`Runtime.stream()` 记录有界调用 ID，仅在原 CLI 会话仍活、宿主 signal 未取消时保留有效期为 `idle_ttl` 的 `TimedOutTool`。宿主实际返回闭合结果后，须匹配同会话、同一未取消 signal、存活的 CLI、模型/档位、稳定 system、`source_revision`、`transient_hash` 及包含原调用名称和参数的历史哈希。先用 `check_result()` 校验结果，再消耗恢复标记。 |
 | 受支持 runner 到达 `max_steps` | `host_compat.max_steps_notice()` 根据当前 runner、signal、步数和拔掉的工具集识别收尾。属于同一运行的保留工具 prompt 会退休，由已闭合历史生成总结。若完成收尾后又收到一组闭合工具交换，仅在当前会话仍活、同一 signal、历史前缀及模型/档位/system 匹配、调用未登记为已处理时允许一次文本收尾。 |
 
-两条路径都把已完成结果作为文本历史送入一次新无工具 prompt，禁用 MCP 和可选原生工具。收尾或恢复失败仍受防重放保护，即使宿主已裁掉旧工具历史。超时路径通过校验后即消耗标记，生成失败也不可再次提交。已识别的超时回填失配、失效或重复报 `TOOL_TIMEOUT`，禁 retry/fallback。缺少超时证据的旧回填（如重载后）或不匹配的收尾回填报 `TOOL_STALE`。格式、预算错误保留对应错误码。两组回归见 [test_tool_pipeline.py](../tests/test_tool_pipeline.py) 和[宿主源码离线检查](testing.md#宿主源码离线检查)。
+两条路径都把已完成结果送入一次新无工具 prompt，禁用 MCP 和可选原生工具。较早的图片以哈希占位，合法尾部工具图片随该 prompt 发送并要求 CLI 声明图片能力。收尾或恢复失败仍受防重放保护，即使宿主已裁掉旧工具历史。超时路径通过校验后即消耗标记，生成失败也不可再次提交。已识别的超时回填失配、失效或重复报 `TOOL_TIMEOUT`，禁 retry/fallback。缺少超时证据的旧回填（如重载后）或不匹配的收尾回填报 `TOOL_STALE`。格式、预算错误保留对应错误码。两组回归见 [test_tool_pipeline.py](../tests/test_tool_pipeline.py) 和[宿主源码离线检查](testing.md#宿主源码离线检查)。
 
 ## MCP 的两层权限与两份 schema
 

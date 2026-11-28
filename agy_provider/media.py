@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
 from .errors import AgyError
-from .messages import digest
+from .messages import digest, tool_continuation_tail
 
 MIMES = {"image/png", "image/jpeg"}
 PNG = b"\x89PNG\r\n\x1a\n"
@@ -526,7 +526,7 @@ class _Images:
         self.history[key] = part
         return part
 
-    async def parts(self, value, *, allow_images=True, historical=False):
+    async def parts(self, value, *, allow_images=True, historical=False, dedupe=True):
         if not isinstance(value, list):
             return value
         result, seen = [], set()
@@ -550,7 +550,7 @@ class _Images:
                 part = await load(part.get("data"), part["mimeType"])
             elif kind not in {"text", "think"}:
                 raise _error("UNSUPPORTED", "音频、视频、PDF 及未知内容块尚未支持。")
-            if part.get("type") in {"image", "historical_image"}:
+            if dedupe and part.get("type") in {"image", "historical_image"}:
                 identity = part.get("image_sha256") or part["data"]
                 if identity in seen:
                     continue
@@ -580,44 +580,55 @@ async def prepare_media(contexts, prompt, extra_parts, image_urls, settings, *, 
     verified image fingerprint or an opaque historical source descriptor.
     Only digests of previously verified sources survive this invocation.
     In contexts-only calls only extra images are merged, since AstrBot has already
-    assembled text parts. Repeated images within a turn are sent once.
+    assembled text parts. Tool image pairs retain their order and multiplicity.
     """
-    images = _Images(settings, cache if cache is not None and scope else ImageFingerprints(), scope)
-    normalized = []
-    contexts = contexts or []
-    for index, raw in enumerate(contexts):
+    cache = cache if cache is not None and scope else ImageFingerprints()
+    images = _Images(settings, cache, scope)
+    raw_list = []
+    for raw in contexts or []:
         message = raw.model_dump() if hasattr(raw, "model_dump") else raw
         if not isinstance(message, dict):
             raise _error("INPUT", "消息必须为对象。")
-        message = dict(message)
+        raw_list.append(dict(message))
+    raw_tail = tool_continuation_tail(raw_list, stage="raw") if prompt is None else None
+    tool_image_indices = {
+        index
+        for index in range(2, len(raw_list))
+        if raw_list[index].get("role") == "user"
+        and raw_list[index - 1].get("role") == "tool"
+        and tool_continuation_tail(raw_list[index - 2 : index + 1], stage="raw") is not None
+    }
+    for index, message in enumerate(raw_list):
         message["content"] = await images.parts(
             message.get("content"), allow_images=message.get("role") == "user",
-            historical=prompt is not None or index != len(contexts) - 1,
+            historical=prompt is not None or index != len(raw_list) - 1,
+            dedupe=index not in tool_image_indices,
         )
-        normalized.append(message)
-    extras = await images.parts(extra_parts or [])
+    extra_images = _Images(settings, cache, scope) if raw_tail is not None else images
+    extras = await extra_images.parts(extra_parts or [])
     if not isinstance(extras, list):
         raise _error("INPUT", "extra_user_content_parts 必须为列表。")
     if image_urls is not None and not isinstance(image_urls, (list, tuple)):
         raise _error("INPUT", "image_urls 必须为列表。")
     for source in image_urls or []:
-        extras = _merge_parts(extras, [await images.block(source)])
-    if prompt is None and normalized:
+        extras = _merge_parts(extras, [await extra_images.block(source)])
+    if prompt is None and raw_list:
         additions = [part for part in extras if part.get("type") == "image"]
         if additions:
-            if normalized[-1].get("role") == "user":
-                normalized[-1]["content"] = _merge_parts(
-                    normalized[-1].get("content"), additions
+            if raw_tail is None and raw_list[-1].get("role") == "user":
+                raw_list[-1]["content"] = _merge_parts(
+                    raw_list[-1].get("content"), additions
                 )
             else:
                 # The native runner repeats extra_user_content_parts on the
                 # contexts-only tool continuation. Only attachments already in
                 # its latest user turn may be ignored; a genuinely new image
                 # cannot be smuggled into an outstanding tool request.
-                latest_user = next(
-                    (m for m in reversed(normalized) if m.get("role") == "user"),
-                    None,
-                )
+                end = raw_tail.tool_index if raw_tail is not None else len(raw_list)
+                latest_user = next((
+                    raw_list[i] for i in range(end - 1, -1, -1)
+                    if raw_list[i].get("role") == "user" and i not in tool_image_indices
+                ), None)
                 content = latest_user.get("content") if latest_user else None
                 known = (
                     {part["image_sha256"] for part in content if part.get("type") == "historical_image"}
@@ -627,4 +638,4 @@ async def prepare_media(contexts, prompt, extra_parts, image_urls, settings, *, 
                 if any(digest(part) not in known for part in additions):
                     raise _error("INPUT", "工具续轮不能附加新的图片。")
         extras = []
-    return normalized, extras
+    return raw_list, extras
