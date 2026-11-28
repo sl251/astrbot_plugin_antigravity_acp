@@ -82,8 +82,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -132,8 +132,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-sys")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -208,8 +208,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-struct")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -336,8 +336,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-dual")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -417,8 +417,8 @@ class SessionReuseTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime(settings, self.root / "rt-anon")
         self.addAsyncCleanup(runtime.close)
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -581,8 +581,8 @@ class SessionImageRebuildTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(runtime.close)
         png_url = _minimal_png_data_url()
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -648,8 +648,8 @@ class SessionImageRebuildTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(runtime.close)
         png_url = _minimal_png_data_url()
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with (
@@ -716,8 +716,8 @@ class SessionImageRebuildTests(unittest.IsolatedAsyncioTestCase):
         png_url = _minimal_png_data_url()
         launch_scenarios = ["echo", "no-image"]
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             scenario = launch_scenarios.pop(0) if launch_scenarios else "no-image"
             return [sys.executable, str(FIXTURE), scenario, *args[1:]]
 

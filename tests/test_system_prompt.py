@@ -105,14 +105,12 @@ class HostCapabilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                          "transient_data": transient} if structured else None
                                 homes = []
 
-                                def launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-                                    if use_default_agent:
-                                        path = home / "workspace" / "AGENTS.md"
-                                    else:
-                                        path = home / "config" / "plugins" / "astrbot-chat" / "agents" / "astrbot-chat.md"
+                                def launch(info, home, *, customizations_mode="inherit"):
+                                    self.assertFalse((home / "config").exists())
+                                    path = home / "workspace" / "AGENTS.md"
                                     homes.append(path.read_text(encoding="utf-8"))
-                                    args = real_launch_args(info, home, use_default_agent,
-                                                            customizations_mode=customizations_mode)
+                                    args = real_launch_args(info, home, customizations_mode=customizations_mode)
+                                    self.assertNotIn("--agent", args)
                                     return [sys.executable, str(Path(__file__).with_name("fake_cli.py")), "echo", *args[1:]]
 
                                 captured = []

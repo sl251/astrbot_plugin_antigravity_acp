@@ -50,8 +50,8 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
             return now
 
         def run_with_scenario(scenario):
-            def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-                args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+            def fake_launch(info, home, *, customizations_mode="inherit"):
+                args = real_launch_args(info, home, customizations_mode=customizations_mode)
                 return [sys.executable, str(FIXTURE), scenario, *args[1:]]
 
             return patch("agy_provider.sessions.launch_args", side_effect=fake_launch)

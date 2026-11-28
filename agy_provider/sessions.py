@@ -481,7 +481,6 @@ class Runtime:
                 launch_args(
                     info,
                     session.home,
-                    use_default_agent=tools_mode,
                     customizations_mode=self.settings.agy_customizations_mode,
                 ),
                 session.home / "workspace",

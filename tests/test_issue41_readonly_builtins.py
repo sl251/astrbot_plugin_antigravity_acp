@@ -129,9 +129,11 @@ class NoMcpBuiltinsModeTests(unittest.IsolatedAsyncioTestCase):
         stubs = _load_provider_module(self.root)
         seen_homes = []
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            seen_homes.append((home, use_default_agent))
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            agents_text = (home / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+            seen_homes.append((home, agents_text, (home / "config").exists()))
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
+            self.assertNotIn("--agent", args)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with patch.dict(sys.modules, stubs):
@@ -157,32 +159,34 @@ class NoMcpBuiltinsModeTests(unittest.IsolatedAsyncioTestCase):
                     prompt="search something", session_id="s-nomcp", func_tool=None, abort_signal=asyncio.Event(),
                 )
                 self.assertEqual(res1.completion_text, "fake answer")
-                self.assertTrue(seen_homes[-1][1])  # use_default_agent=True
-                agents_md = (seen_homes[-1][0] / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+                agents_md = seen_homes[-1][1]
+                self.assertFalse(seen_homes[-1][2])
                 self.assertIn("No AstrBot MCP tools are active in this session.", agents_md)
                 self.assertIn("may use the built-in search_web tool", agents_md)
                 self.assertEqual(provider.runtime.telemetry.history[-1]["mode"], "tools")
                 self.assertEqual(provider.runtime.telemetry.history[-1]["tool_calls"], 1)
 
-                # 2. 同会话切换 tool_choice="none" 触发会话重建并回退到 astrbot-chat
+                # 2. 同会话切换 tool_choice="none" 触发会话重建并切换为无工具默认 agent + AGENTS.md
                 scenario.write_text("echo")
                 res2 = await provider.text_chat(
                     prompt="no tools this turn", session_id="s-nomcp",
                     func_tool=SimpleNamespace(tools=[]), tool_choice="none", abort_signal=asyncio.Event(),
                 )
                 self.assertEqual(res2.completion_text, "reply:1")
-                self.assertFalse(seen_homes[-1][1])
+                self.assertIn("No tools are available in this session.", seen_homes[-1][1])
+                self.assertFalse(seen_homes[-1][2])
                 self.assertEqual(provider.runtime.telemetry.history[-1]["mode"], "chat")
                 self.assertIn("tool_hash_changed", provider.runtime.telemetry.history[-1]["rebuild_reasons"])
 
-                # 3. chat 实例即使全局开启 search_web 也保持 chat 模式
+                # 3. chat 实例即使全局开启 search_web 也保持 chat 模式且不传 --agent
                 chat_provider = mod.AgyProvider(
                     {"id": "chat-only", "model": "gemini-test", "custom_extra_body": {"agy_tools_mode": "chat"}},
                     {},
                 )
                 self.addAsyncCleanup(chat_provider.terminate)
                 await chat_provider.text_chat(prompt="hello", session_id="s-chat", func_tool=None)
-                self.assertFalse(seen_homes[-1][1])
+                self.assertIn("No tools are available in this session.", seen_homes[-1][1])
+                self.assertFalse(seen_homes[-1][2])
                 self.assertEqual(chat_provider.runtime.telemetry.history[-1]["mode"], "chat")
 
     def test_guardrails_no_mcp_copy_keeps_strict_prohibitions(self):

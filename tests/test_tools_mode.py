@@ -185,15 +185,16 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caught.exception.code, "CONFIG")
         sys.modules.pop("agy_provider.provider", None)
 
-    async def test_chat_instance_argv_uses_lean_agent_and_excludes_tools(self):
+    async def test_chat_instance_argv_uses_default_agent_and_excludes_tools(self):
         stubs = _load_provider_module(self.root)
         func_tool = SimpleNamespace(tools=[_tool("web_search")])
         signal = asyncio.Event()
         seen_homes = []
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            seen_homes.append((home, use_default_agent))
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            agents_text = (home / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+            seen_homes.append((home, agents_text, (home / "config").exists()))
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with patch.dict(sys.modules, stubs):
@@ -215,7 +216,7 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
                 patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
                 patch(
                     "agy_provider.sessions.discover",
-                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.19", False, True)),
                 ),
                 patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
             ):
@@ -263,12 +264,12 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
         inits = [e for e in events if e["event"] == "init"]
         self.assertEqual(len(inits), 1)
         argv = inits[0]["argv"]
-        self.assertIn("--agent", argv)
-        idx = argv.index("--agent")
-        self.assertEqual(argv[idx + 1], "astrbot-chat")
-        self.assertEqual(seen_homes[0][1], False)
+        self.assertNotIn("--agent", argv)
+        self.assertNotIn("--include-default-customizations=false", argv)
+        self.assertIn("No tools are available in this session.", seen_homes[0][1])
+        self.assertIn("Never run built-in", seen_homes[0][1])
+        self.assertFalse(seen_homes[0][2])
 
-        # Home dir still exists during active session; verify lean agent definition
         # Also verify telemetry recorded mode == "chat" and tool_schema_bytes == 0
         turns = list(provider.runtime.telemetry.history)
         self.assertEqual(turns[0]["mode"], "chat")
@@ -279,8 +280,8 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
         func_tool = SimpleNamespace(tools=[_tool("calc")])
         signal = asyncio.Event()
 
-        def fake_launch(info, home, use_default_agent=False, *, customizations_mode="inherit"):
-            args = real_launch_args(info, home, use_default_agent, customizations_mode=customizations_mode)
+        def fake_launch(info, home, *, customizations_mode="inherit"):
+            args = real_launch_args(info, home, customizations_mode=customizations_mode)
             return [sys.executable, str(FIXTURE), "echo", *args[1:]]
 
         with patch.dict(sys.modules, stubs):
@@ -304,7 +305,7 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
                 patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
                 patch(
                     "agy_provider.sessions.discover",
-                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.19", False, True)),
                 ),
                 patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
             ):
@@ -332,9 +333,10 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
             )
             self.addAsyncCleanup(p_enabled.terminate)
             with (
+                patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
                 patch(
                     "agy_provider.sessions.discover",
-                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.19", False, True)),
                 ),
                 patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
             ):
@@ -347,21 +349,32 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(p_enabled.runtime.telemetry.history[-1]["mode"], "chat")
 
-            # Case 3: master switch True + empty active func_tool still spawns lean chat agent
+            # Case 3: master switch True + empty active func_tool + minimal mode still uses default agent without --agent
+            mod.configure(Settings(enable_tools=True, auth_bridge=False, agy_customizations_mode="minimal"))
+            p_minimal = mod.AgyProvider(
+                {
+                    "id": "agy_tools_minimal_chat",
+                    "model": "gemini-test",
+                    "custom_extra_body": {"agy_tools_mode": "tools"},
+                },
+                {},
+            )
+            self.addAsyncCleanup(p_minimal.terminate)
             with (
+                patch.dict(os.environ, {"AGY_TEST_LOG": str(self.log_path)}),
                 patch(
                     "agy_provider.sessions.discover",
-                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.2", False)),
+                    AsyncMock(return_value=LaunchInfo("fake", "agy 1.5.19", False, True)),
                 ),
                 patch("agy_provider.sessions.launch_args", side_effect=fake_launch),
             ):
-                await p_enabled.text_chat(
+                await p_minimal.text_chat(
                     prompt="空工具集",
                     session_id="empty-tools-s1",
                     func_tool=SimpleNamespace(tools=[]),
                     abort_signal=signal,
                 )
-            self.assertEqual(p_enabled.runtime.telemetry.history[-1]["mode"], "chat")
+            self.assertEqual(p_minimal.runtime.telemetry.history[-1]["mode"], "chat")
 
         sys.modules.pop("agy_provider.provider", None)
 
@@ -370,8 +383,11 @@ class ToolsModeTests(unittest.IsolatedAsyncioTestCase):
             for line in self.log_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        self.assertIn("--agent", events[0]["argv"])
-        self.assertIn("astrbot-chat", events[0]["argv"])
+        inits = [e for e in events if e["event"] == "init"]
+        self.assertEqual(len(inits), 3)
+        for init_event in inits:
+            self.assertNotIn("--agent", init_event["argv"])
+        self.assertIn("--include-default-customizations=false", inits[-1]["argv"])
 
 
 if __name__ == "__main__":

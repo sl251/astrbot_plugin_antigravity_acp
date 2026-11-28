@@ -1,10 +1,10 @@
 {
   "agy_customizations_mode": {
-    "description": "AGY 工具组件模式（实验）",
+    "description": "AGY 默认组件模式（实验）",
     "type": "string",
     "default": "inherit",
     "options": ["inherit", "minimal"],
-    "hint": "inherit 保持原行为。minimal 仅在工具默认 Agent 加入 --include-default-customizations=false；CLI 不支持时明确报 UNSUPPORTED。MCP 兼容性与 Token 收益尚未验收，请勿默认开启。恢复 inherit 并重载即可回退；纯聊天隔离 Agent 不变。"
+    "hint": "inherit 保持原行为。minimal 在默认 Agent 会话加入 --include-default-customizations=false（覆盖纯聊天与工具路径）；CLI 不支持时明确报 UNSUPPORTED。MCP 兼容性与 Token 收益尚未完整验收，请勿默认开启。恢复 inherit 并重载即可回退。"
   },
   "context_compaction_min_peak": {
     "description": "疑似上下文压缩的最小峰值",
@@ -183,7 +183,7 @@
     "description": "启用工具总闸（宿主 MCP 工具桥与已授权 CLI 原生只读/搜索工具）",
     "type": "bool",
     "default": false,
-    "hint": "总闸；非空宿主 MCP 或已启用的原生内置工具会启用默认 agent（纯内置模式不启动多余 MCP 子进程）。POSIX 使用私有 Unix socket，Windows 使用仅绑定 127.0.0.1 的每会话认证桥；宿主工具执行/审批仍交宿主。"
+    "hint": "总闸；非空宿主 MCP 或已启用的原生内置工具时激活工具模式（纯内置模式不启动多余 MCP 子进程）。纯聊天同样使用默认 agent 但不挂载工具桥且保持无工具护栏。POSIX 使用私有 Unix socket，Windows 使用仅绑定 127.0.0.1 的每会话认证桥；宿主工具执行/审批仍交宿主。"
   },
   "session_reuse_mode": {
     "description": "会话复用模式",
