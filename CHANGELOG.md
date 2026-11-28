@@ -9,10 +9,6 @@
 - **验证与限制**：PR #49 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/46103670914) 与 PR #51 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/46107590439) 四组 Ubuntu/Windows × Python 3.11/3.12 回归通过；合并后本地 Python 389 项通过（17 项按平台跳过）、Node 47/47、`compileall`、`check_sensitive.py` 与 `git diff --check` 通过。#49 的运行时代码已于 2026-11-28 部署到 Linux Docker / AstrBot 4.29.4 / 官方 CLI 实机，并用 webchat 复现：修复前工具回看图片后立即 `TOOL_HISTORY` 并切到备用模型，修复后同一用例续轮成功、答出图中内容。**未验证**：工具真正返回图片时 MCP `image` 块送达 CLI 的路径（实机自动附图使工具返回 0 张，仅离线测试覆盖）。v0.9.0 发布包已于 2026-11-28 整目录部署到该实机：容器内 Py3.12 回归 389 项通过，加载无报错，`agy_acp` 仍为默认模型，同一 webchat 用例冒烟通过；#51 的面板交互由维护者验收，后端 `monitor/turns` 与面板未经自动化实机点击验证；Windows、macOS 与 AstrBot 4.30 未验证。
 - **升级须知**：`media_roots` 需包含宿主落盘图片的目录（AstrBot Docker 默认 `/AstrBot/data/temp`），否则 context_aware 自动附图等经宿主落盘的本地图片会报 `IMAGE_PATH` 并整轮 fallback（[#50](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/50)，属配置而非代码缺陷）。无数据迁移，可回退 v0.8.6。
 
-## 未发布
-
-- **工具图片续轮（#48）**：兼容 AstrBot 4.29.4 附加的工具图片消息，按调用名、缓存路径及顺序校验后回填同一 ACP prompt。CLI 未声明图片能力时仅回填文本和图片标注。带图迟到结果同样经过超时恢复和旧结果拦截。
-
 ## 0.8.6（2026-11-27）
 
 - **工具执行超时后的迟到结果重建（#45 / [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)）**：宿主工具执行超过 `tool_execution_timeout` 后，插件不再关闭 ACP 会话，而是在会话上记一份超时交接。宿主晚带回闭合的工具结果时，校验同一宿主运行、未过 `idle_ttl`、会话存活、模型与上下文一致、历史前缀与原工具调用完全匹配、结果未提交过；全部通过则把真实结果按文本历史送入一次无工具生成。任一条件不满足时返回 `TOOL_TIMEOUT`（禁止重试与 fallback），不再误报「进程重载」；真正的进程重载或过期回填仍返回 `TOOL_STALE`。

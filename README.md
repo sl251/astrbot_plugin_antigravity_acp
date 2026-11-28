@@ -120,7 +120,12 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(完整历史见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
-- **v0.9.0**：带图工具结果的续轮不再误报 `TOOL_HISTORY`（#48 · [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49)），工具结果里的图片经 MCP 回传给官方 CLI；每日用量热力图修复悬停抽动与月标重叠，监控页新增可折叠「历史调用记录」面板与只读接口 `GET monitor/turns`（[PR #51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51)）。
+- **v0.9.0**（2026-11-28）
+  - 修复：模型调用看图类工具后，回复与图片无关或直接掉到备用模型（`TOOL_HISTORY`）。宿主会在工具结果之后再追加一条图片消息，旧版把它当作被改写的历史；现在带图的续轮正常完成，不匹配的仍照旧拒绝。
+  - 工具结果里的图片经 MCP 回传给官方 CLI；CLI 不支持图片时只送文本标注。
+  - 每日用量热力图修复悬停抽动与月标重叠；监控页新增可折叠的「历史调用记录」面板（只读接口 `GET monitor/turns`）。
+  - 升级须知：`media_roots` 需包含宿主落盘图片的目录（Docker 默认 `/AstrBot/data/temp`），否则自动附图会报 `IMAGE_PATH` 并整轮 fallback。
+  - 验证范围与未验证项见 [CHANGELOG 0.9.0](./CHANGELOG.md#0902026-11-28)。
 - **v0.8.6**：工具执行超时后晚带回的结果在会话、运行与历史都匹配时重建一次无工具生成，不再抛 `TOOL_STALE` 或切到 fallback；不匹配时返回 `TOOL_TIMEOUT`。跑满步数后的收尾请求不再报 `TOOL_CONTEXT`（[#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) · [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)）。
 - **v0.8.5**：额度按需自动刷新、60 秒缓存与失败冷却；新增有界 SQLite 监控明细持久化（24 小时、每实例最多 100 轮），重载后恢复请求、耗时、Token 与复用统计，存储异常时降级为内存统计（[#43](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/43) · [PR #44](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/44)）。
 - **v0.8.4**：新增独立「工具权限」页签（`setup/tool-policy`）、官方 CLI 账号额度查询（`setup/quota-refresh` / `monitor/quota`）与本地每日用量热力图（`monitor/daily/*`），精简工具权限说明、汉化额度窗口与折叠长列表并重构 `/agy` 管理员指令可读性（[#38](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/38) · [PR #39](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/39)）；完成 CLI `1.5.18` 原生工具协议实测，开放 `read_file` 至 `1.5.18` 与只读分页校验，解除原生工具对宿主 MCP 非空的依赖并修正非搜索拒止文案（[#41](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/41) · [PR #42](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/42)）。
