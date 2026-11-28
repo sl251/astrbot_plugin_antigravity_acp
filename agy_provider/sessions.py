@@ -776,6 +776,12 @@ class Runtime:
                                 if reason == "end_turn" and getattr(session.client, "permission_errors", None):
                                     if any(is_known_builtin(d.tool_name) for d in session.client.permission_errors):
                                         raise BuiltinDenied()
+                                    if session.broker is None:
+                                        raise AgyError(
+                                            "TOOL_PERMISSION",
+                                            "AGY 工具权限请求被安全策略拒绝，随后 CLI 结束了本轮且未返回正文。"
+                                            "当前会话未启用工具，请继续正常提问。",
+                                        )
                                     raise AgyError(
                                         "TOOL_PERMISSION",
                                         "AGY 工具权限请求被安全策略拒绝，随后 CLI 结束了本轮且未返回正文。"

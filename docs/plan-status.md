@@ -1,6 +1,6 @@
 # 计划与历史资料状态索引
 
-基线核对于 2026-11-28，main `d992148`。当前实现与入口以 [AGENTS.md](../AGENTS.md) 为准。下列证据仅适用于所述提交、环境和场景。Issue 的关闭与验收是独立状态。
+基线核对于 2026-11-28，main `9bdc8a1`（含 #52 跟进加固）。当前实现与入口以 [AGENTS.md](../AGENTS.md) 为准。下列证据仅适用于所述提交、环境和场景。Issue 的关闭与验收是独立状态。
 
 ## 近期已实现及证据范围
 
@@ -13,6 +13,7 @@
 | [#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) / [#46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46) | 执行超时后的迟到结果恢复、步数用尽的无工具收尾 | [发行记录](../CHANGELOG.md#0862026-11-27) 记载 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042) 四组通过、AstrBot 4.29.4 runner 源码离线回归，以及 Linux Docker / AstrBot 4.29.4 实机部署与一轮 webchat 验证。长工具场景未在实机复现，原故障中 fallback 日志与实际切换不符的原因仍未知。 |
 | [#48](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/48) / [#49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49) | 带图工具结果的续轮校验、MCP 图片回传与续轮判定连带修复 | [发行记录](../CHANGELOG.md#0902026-11-28) 记载 CI 四组通过与合并后离线回归；2026-11-28 在 Linux Docker / AstrBot 4.29.4 / 官方 CLI 实机以 webchat 复现并确认修复（`TOOL_HISTORY` 48 小时 5 次降为 0）。工具真正返回图片时 MCP `image` 块送达 CLI 的路径仅离线覆盖。连带排查出的 [#50](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/50) 为线上 `media_roots` 配置问题，已改配置验证，不涉及代码。 |
 | [#51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51) | 热力图悬停与月标修复、只读 `monitor/turns` 与历史调用记录面板 | PR 记载离线 Python/Node 回归与 CI 四组通过；v0.9.0 已部署 Linux Docker / AstrBot 4.29.4 实机（容器内回归 389 项通过、加载无报错），面板交互由维护者验收，`monitor/turns` 未经自动化实机调用验证。 |
+| [#52](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/52) / [#53](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/53) | 纯聊天与无工具路径改用默认 Agent + `AGENTS.md`，以及 `probe` 精简透传、未登记工具防重放与护栏/文档跟进加固 | PR #53 与跟进分支均有 Windows/Linux 离线回归（394 项，含 AstrBot 4.29.4 真实 runner 源码）及 Linux Docker / CLI `1.5.19` 实机 `probe`（`inherit`/`minimal`）、两轮会话复用、护栏拒止与 `/AstrBot/AGENTS.md` 无穿透核查。单账号精确额度倍率 A/B（沿用上游 `#1890`）、QQ/webchat 长对话与 Windows/macOS 实机未验证；CLI `1.5.19` 原生 `read_file` 保持 `unverified`。 |
 
 #45 Issue 正文混合了主 runner 和子 Agent 的步数日志。原线上触发为工具交接后的执行超时，主 runner 的耗尽收尾是另一路。见[维护者的根因更正](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45#issuecomment-7199090573)。PR #40 已关闭，文档说明随后随 #42 合入。
 

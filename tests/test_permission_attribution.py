@@ -16,7 +16,9 @@ from agy_provider.transport import AcpClient
 
 
 class PermissionAttributionTests(unittest.IsolatedAsyncioTestCase):
-    async def run_turn(self, *, deny=True, foreign=False, text="", retry=None, reason="end_turn"):
+    async def run_turn(
+        self, *, deny=True, foreign=False, text="", retry=None, reason="end_turn", tool_name="browser"
+    ):
         temp = tempfile.TemporaryDirectory(prefix="agy-permission-")
         self.addCleanup(temp.cleanup)
         settings = Settings(auth_bridge=False)
@@ -40,7 +42,7 @@ class PermissionAttributionTests(unittest.IsolatedAsyncioTestCase):
                     "id": "permission", "method": "session/request_permission",
                     "params": {
                         "sessionId": "foreign" if foreign else "current",
-                        "toolCall": {"name": "browser", "toolCallId": "native", "status": "pending"},
+                        "toolCall": {"name": tool_name, "toolCallId": "native", "status": "pending"},
                         "options": [{"optionId": "allow", "kind": "allow_once"}],
                     },
                 })
@@ -97,7 +99,66 @@ class PermissionAttributionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_guardrails_explicitly_disallow_native_web_and_browser_tools(self):
         for mode in (False, True):
-            self.assertIn("web search or browser", _guardrails(mode))
+            text = _guardrails(mode)
+            self.assertIn("web search or browser", text)
+            self.assertIn("Do not use read_url or execute_url", text)
+        chat_guard = _guardrails(False)
+        self.assertIn("Do not call any declared tool or function", chat_guard)
+        for token in ("update_steps", "ask_question", "swarm", "send_message"):
+            self.assertIn(token, chat_guard)
+
+    def test_no_tools_unknown_tool_call_sets_no_retry_and_no_fallback(self):
+        client = AcpClient(Settings(auth_bridge=False))
+        client.active = True
+        client.session_id = "chat-s1"
+        with self.assertRaises(AgyError) as caught:
+            client._on_update({
+                "sessionId": "chat-s1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "c-unknown",
+                    "name": "future_unregistered_tool",
+                    "status": "in_progress",
+                },
+            })
+        self.assertEqual(caught.exception.code, "TOOLS_DISABLED")
+        self.assertTrue(caught.exception.no_retry)
+        self.assertTrue(caught.exception.no_fallback)
+        self.assertNotIn("无工具 agent", str(caught.exception))
+
+    async def test_no_tools_unknown_permission_denial_message_matches_chat_context(self):
+        _, error, _ = await self.run_turn(tool_name="future_unregistered_tool")
+        self.assertEqual(error.code, "TOOL_PERMISSION")
+        self.assertNotIn("改用纯聊天模式", str(error))
+        self.assertIn("未启用工具", str(error))
+
+    async def test_provider_chat_mode_builtin_denied_notice_omits_mcp_suggestion(self):
+        import importlib
+        import sys
+        from agy_provider.builtin_tools import BuiltinDenied
+        from tests.test_tools_mode import _load_provider_module
+
+        temp = tempfile.TemporaryDirectory(prefix="agy-chat-notice-")
+        self.addCleanup(temp.cleanup)
+        stubs = _load_provider_module(Path(temp.name))
+        with patch.dict(sys.modules, stubs):
+            sys.modules.pop("agy_provider.provider", None)
+            mod = importlib.import_module("agy_provider.provider")
+            mod.configure(Settings(enable_tools=False, auth_bridge=False))
+            self.addCleanup(mod.configure, Settings())
+            provider = mod.AgyProvider({"id": "chat-notice", "model": "gemini-test"}, {})
+            self.addAsyncCleanup(provider.terminate)
+
+            async def fail_builtin(*args, **kwargs):
+                if False:
+                    yield None
+                raise BuiltinDenied()
+
+            with patch.object(provider.runtime, "stream", side_effect=fail_builtin):
+                resp = await provider.text_chat(prompt="hello", session_id="s1")
+            self.assertIn("受限的 CLI 内置工具", resp.completion_text)
+            self.assertNotIn("AstrBot 已启用的工具", resp.completion_text)
+        sys.modules.pop("agy_provider.provider", None)
 
 
 if __name__ == "__main__":

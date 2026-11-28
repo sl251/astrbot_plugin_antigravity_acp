@@ -102,7 +102,12 @@ async def _run_probe(
         client = AcpClient(settings)
         try:
             stage("initialize")
-            await client.start(launch_args(info, home), home / "workspace")
+            await client.start(
+                launch_args(
+                    info, home, customizations_mode=settings.agy_customizations_mode
+                ),
+                home / "workspace",
+            )
             report["process_supervision"] = (
                 "windows_job" if getattr(client.proc, "_agy_job", None) is not None
                 else "windows_taskkill_fallback" if os.name == "nt" else "posix_process_group"

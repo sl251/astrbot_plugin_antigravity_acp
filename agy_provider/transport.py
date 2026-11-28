@@ -604,7 +604,9 @@ class AcpClient:
                 raise BuiltinDenied("TOOLS_DISABLED", notice, user_notice=notice)
             raise AgyError(
                 "TOOLS_DISABLED",
-                "AGY 尝试调用内置工具；已中止该轮，请检查 CLI 对无工具 agent 的支持。",
+                "AGY 在无工具会话中尝试调用未授权工具；已中止该轮，禁止自动重放。",
+                no_retry=True,
+                no_fallback=True,
             )
         kinds = {"agent_message_chunk": "text", "agent_thought_chunk": "thought"}
         if kind not in kinds:

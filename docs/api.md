@@ -39,7 +39,7 @@ GET `setup/status` 的 `tool_policy` 字段与 POST `setup/tool-policy` 的成�
 | --- | --- |
 | 宿主 MCP | 受总闸与实例模式控制，快照来自宿主，审批与执行仍由宿主管理。[两层权限与 schema](architecture.md#mcp-的两层权限与两份-schema) |
 | `read_file` | 仅 Linux 官方 CLI `1.5.17` / `1.5.18`，版本探测与实际 ACP 握手均须通过，并使用 `strict`。活跃调用需匹配唯一 `allow_once` 及权限帧。仅当前私有工作区顶层、同属主、无组/其他写权限的普通单链接 `.txt`。合法 `StartLine` / `EndLine` / `ByteOffset` 为严格整数，参数在更新/权限帧之间须一致；拒绝 `file:///`、跨目录与软链接。插件核验元数据，CLI 读取。许可回包前计入次数预算。面板未确认时只提供 `deny`，启用请求返 `UNSUPPORTED`。 |
-| `search_web` | 实验性。CLI 自动执行，关闭时先用模型护栏约束，收到通知仍会中止；发现时联网请求可能已发出。开启时每个新调用在通知后计入次数预算，超预算中止当前轮。策略行显示 `pre_execution_approval=false`、`enforcement="post_observation"`。预算无法保证实际联网次数。 |
+| `search_web` | 实验性。CLI 自动执行，关闭时（包括 `enable_tools=false` 或 `agy_tools_mode=chat` 的默认 agent 纯聊天路径）均依赖模型护栏与事后观测中止，发现时联网请求可能已发出。开启时每个新调用在通知后计入次数预算，超预算中止当前轮。策略行显示 `pre_execution_approval=false`、`enforcement="post_observation"`。预算无法保证实际联网次数。 |
 | 固定拒绝 | 终端、写/改文件、网页读取/执行、浏览器、CLI 调度、子代理及工作流等。保持未知调用拒绝；以 [BUILTIN_SPECS](../agy_provider/builtin_tools.py) 为准。 |
 
 两项可选原生工具都需要 `enable_tools`，受 `agy_tools_mode` 和 `tool_choice` 限制，可在没有宿主 MCP 时独立激活。MCP、读取和搜索共享本轮 `tool_max_calls`。预算及超时配置以 [schema](../_conf_schema.json) 为准。CLI 调查仅用于[追溯实测证据](issue41-builtin-tools-probe.md)。

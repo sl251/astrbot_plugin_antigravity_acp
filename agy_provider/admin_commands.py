@@ -255,7 +255,7 @@ def doctor_text(report, hint):
 
     read_text = "支持" if report.get("verified_read") else "未验证"
     custom_text = "精简" if report.get("customizations_mode") == "minimal" else "标准"
-    lines.append(f"工具边界：内置读文件{read_text} · 组件{custom_text}")
+    lines.append(f"安全与组件：内置读文件{read_text} · 默认组件{custom_text}")
 
     routing = report.get("routing") or {}
     if isinstance(routing, dict) and routing:
