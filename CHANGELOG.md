@@ -1,9 +1,10 @@
 # 变更记录
 
-## 未发布
+## 0.9.1（2026-11-28）
 
 - **纯聊天与无工具路径改用默认 Agent + `AGENTS.md`（#52 / [PR #53](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/53)）**：自 Antigravity CLI `1.5.17` 起自定义 Agent（`--agent`、插件 `agents`）按 4 倍速率消耗 Gemini 额度。现在纯聊天（`chat` / `enable_tools=false` / `tool_choice=none` / 空工具集）、无工具收尾与超时恢复及 `probe` 自检均不再生成 `astrbot-chat.md` 或传入 `--agent astrbot-chat`，统一改用默认 Agent 并将人设与无工具护栏写入 `workspace/AGENTS.md`；`settings.json` 保持 `toolPermission=strict` 与 `transport.py` 拒止边界，`discover()` 移除 `--agent` 必选限制，`agy_customizations_mode=minimal` 统一覆盖全部默认 Agent 会话（默认仍为 `inherit`）。
 - **默认 Agent 纯聊天路径自检与拒止加固（#52 跟进）**：`probe.py` 同步传递 `agy_customizations_mode` 以在自检阶段即实测 `--include-default-customizations=false` 并在不支持的 CLI 上明确阻断（避免旧 CLI 开启 `minimal` 时自检报绿、对话全报 `UNSUPPORTED`），`onboarding.py` 补充对应阻断回退指引；`transport.py` 无工具路径遇到未登记内置工具时补齐 `no_retry` / `no_fallback` 并更新过时报错文案；`sessions.py` 与 `provider.py` 区分无工具会话权限拒绝文案，不再向纯聊天用户建议切换纯聊天或使用已启用工具；`_guardrails(mcp_tools=False)` 补全全部声明工具与 `read_url`/`execute_url`/`update_steps`/`ask_question`/`swarm` 禁令，并在架构与 API 文档中明确默认 Agent 下 `search_web` 等免事前审批工具仍受事后中止约束。
+- **验证与限制**：PR #53 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/46149404290) 与 PR #54 [CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/46152054838) 的 Ubuntu/Windows × Python 3.11/3.12 回归通过；合并后 2026-11-28 本地（Linux）Python 394 项通过（17 项按平台跳过）、Node 47/47、`compileall`、`check_sensitive.py` 与 `git diff --check` 通过。PR 记载 Linux Docker / AstrBot 4.29.4 / 官方 CLI `1.5.19` 实机：`inherit` 与 `minimal` 两种模式下自检通过、纯聊天两轮会话复用（`reused=true`、`history_relation="exact"`）、要求调用 `run_command`/`search_web` 时模型按护栏拒绝（哨兵文件未创建）、容器 `/AstrBot/AGENTS.md` 未穿透进插件隔离工作区。**未验证**：单账号精确额度倍率 A/B（沿用上游 [#1890](https://github.com/google-antigravity/antigravity-cli/issues/1890) 实测结论）；webchat / QQ 多轮长对话；Windows、macOS 实机；CLI `1.5.19` 原生 `read_file` 仍为 `unverified`。无数据迁移，可回退 v0.9.0。
 
 ## 0.9.0（2026-11-28）
 

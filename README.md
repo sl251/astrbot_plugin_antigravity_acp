@@ -11,7 +11,7 @@
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，把 Antigravity 模型安全、稳定地接入 AstrBot，作为日常对话主力。
 
-> 💡 **主分支 v0.9.0（2026-11-28）**：修复模型调用看图类工具后回复跑偏或掉到备用模型的问题（`TOOL_HISTORY`），工具结果里的图片现在可回传给官方 CLI（[#48](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/48) / [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49)）；修复每日用量热力图悬停抖动与月标重叠，新增可折叠的「历史调用记录」面板（[PR #51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51)）。升级时请确认 `media_roots` 包含 `/AstrBot/data/temp`。详见 [CHANGELOG](CHANGELOG.md#0902026-11-28)。
+> 💡 **主分支 v0.9.1（2026-11-28）**：纯聊天与无工具路径改用官方 CLI 的默认 Agent + `AGENTS.md`，不再使用 `--agent` 自定义智能体，避免 CLI 1.5.17+ 把这类会话按 4 倍计入额度（[#52](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/52) / [PR #53](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/53)）；跟进加固自检透传、无工具路径防重放与护栏（[PR #54](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/54)）。详见 [CHANGELOG](CHANGELOG.md#0912026-11-28)。
 
 ---
 
@@ -120,6 +120,11 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(完整历史见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
+- **v0.9.1**（2026-11-28）
+  - 纯聊天、禁用工具、`tool_choice=none`、无工具收尾与自检不再走 `--agent` 自定义智能体，统一用官方 CLI 的默认 Agent + `workspace/AGENTS.md` 承载人设与护栏。自 CLI `1.5.17` 起自定义 Agent 按 4 倍计入 Gemini 额度，此改动让日常 `chat` 流量回到 1 倍（[#52](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/52) · [PR #53](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/53)）。
+  - 自检同步透传 `agy_customizations_mode`，旧 CLI 开 `minimal` 时自检即阻断，不再出现自检报绿而对话全 `UNSUPPORTED`；无工具会话遇到未登记内置工具补齐 `no_retry`/`no_fallback`，拒止文案不再向纯聊天用户建议切换模式；护栏补齐全部声明工具及 `read_url`/`execute_url`/`swarm` 等禁令（[PR #54](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/54)）。
+  - 注意：默认 Agent 会向模型声明内置工具，纯聊天对 `search_web` 等免事前审批工具改为依赖护栏 + 事后中止，不再有旧版 `tools: []` 的声明级隔离。
+  - 验证范围与未验证项见 [CHANGELOG 0.9.1](./CHANGELOG.md#0912026-11-28)。
 - **v0.9.0**（2026-11-28）
   - 修复：模型调用看图类工具后，回复与图片无关或直接掉到备用模型（`TOOL_HISTORY`）。宿主会在工具结果之后再追加一条图片消息，旧版把它当作被改写的历史；现在带图的续轮正常完成，不匹配的仍照旧拒绝。
   - 工具结果里的图片经 MCP 回传给官方 CLI；CLI 不支持图片时只送文本标注。
