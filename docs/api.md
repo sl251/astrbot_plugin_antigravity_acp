@@ -58,6 +58,8 @@ POST `setup/quota-refresh` 仅接受 `csrf` 与可选严格布尔值 `force`，�
 
 GET `monitor/status` 使用 schema v2，含 `routing`、失败摘要、窗口及 `instances`。每实例 `summary` 和 `recent_turns` 使用合并后的实时和已恢复样本；保留最多 100 轮，接口返回最近 20 轮。`/agy cost` 同源。`historical: true` 表示已恢复样本，`history_storage` 为 `available` / `memory_only`，未加载为 `null`。`pool`、`latest_context` 与运行状态来自当前 runtime。缺失用量保持 `null`，复用率按实际发出的轮次计算。额度查询不进入生成统计。[落盘字段、保留期限及降级](architecture.md#监控明细存储)
 
+GET `monitor/turns` 使用 schema v1，仅由前端折叠明细面板按需读取（同样校验 Dashboard 管理员与 `no-store`、不触发任何 CLI 或模型请求），返回 `sampled_at`、`window` 及 `instances[].turns`（每实例近 24 小时最多 100 轮脱敏调用记录，最新在前，字段投影与 `recent_turns` 一致）。
+
 ## 每日用量
 
 GET `monitor/daily/30`、`monitor/daily/90`、`monitor/daily/365` 返回 schema v1，`timezone="host_local"`。`range` 含 `days/start/end`，`end` 是宿主今天。`models` 为区间模型列表，`days` 仅含有终结轮的日期，含 `date` 及 `by_model`，同一组数值列在日级、模型级均有。

@@ -92,7 +92,7 @@ async function boot(initial = base(), hooks = {}) {
     navigator: {clipboard: {writeText: async () => {throw new Error("iframe clipboard unavailable");}}},
     setTimeout: () => 1, clearTimeout: () => {},
   });
-  const api = await vm.runInContext(`(async () => {${source}\n; return {render, renderMonitor, renderQuota, renderDaily, refreshMonitor, refreshQuotaCache, refreshQuotaManual, loadDailyUsage, saveToolPolicy, parseBridgeError, isAuthDeniedError, formatPanelError, action, poll};})()`, context);
+  const api = await vm.runInContext(`(async () => {${source}\n; return {render, renderMonitor, renderQuota, renderDaily, renderTurnHistory, toggleTurnHistory, loadTurnHistory, refreshMonitor, refreshQuotaCache, refreshQuotaManual, loadDailyUsage, saveToolPolicy, parseBridgeError, isAuthDeniedError, formatPanelError, action, poll};})()`, context);
   return {api, bridge, requests, getRequests, handlers, doc: context.document, get: id => elements.get(id)};
 }
 
@@ -1632,4 +1632,171 @@ test("tool policy folds locked unsupported builtins into drawer only when group 
   assert.equal(collectNodes(drawers[0]).find(n => n.tag === "summary").textContent, "固定拒绝的内置工具（2 项）");
   const drawerRowIds = collectNodes(drawers[0]).filter(n => n.tag === "code").map(n => n.textContent);
   assert.deepEqual(drawerRowIds, ["write_file", "run_command"]);
+});
+
+test("heatmap fixes hover scale jitter, stabilizes footer layout, avoids month label overlap, and clears hover only on grid exit", async () => {
+  const css = readFileSync(new URL("../views/setup/style.css", import.meta.url), "utf8");
+  // 热力图格子悬浮禁止使用 transform: scale(...)，页脚采用纵向固定布局防高度跳变抽动
+  const hmHoverMatch = css.match(/\.hm-cell:hover\s*\{([^}]*)\}/);
+  assert.ok(hmHoverMatch);
+  assert.doesNotMatch(hmHoverMatch[1], /transform\s*:\s*scale/);
+  assert.match(css, /\.heatmap-footer\s*\{[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.heatmap-detail\s*\{[^}]*min-height:/);
+
+  // 2026-10-30（周五）至 2026-11-28：第 0 列仅含 10 月末 2 天且第 1 列即进入 11 月，不应把 10月 与 11月 叠在相邻两列
+  const ui = await boot(base(), {
+    apiGet: async (ep) => {
+      if (ep.startsWith("monitor/daily/")) {
+        return {
+          schema_version: 1,
+          timezone: "host_local",
+          range: {days: 30, start: "2026-10-30", end: "2026-11-28"},
+          models: ["gemini-4-hydrogen"],
+          days: [
+            {date: "2026-11-27", requests: 10, success: 9, failed: 1, input_tokens: 1000, cached_tokens: 400, output_tokens: 200, total_tokens: 1200, usage_unknown_turns: 0, by_model: {}},
+          ],
+        };
+      }
+      return base();
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  const monthLabels = collectNodes(ui.get("daily-heatmap"))
+    .filter(n => n.className === "heatmap-month-label")
+    .map(n => n.textContent)
+    .filter(Boolean);
+  assert.deepEqual(monthLabels, ["11月"]);
+
+  // 鼠标悬停到无记录日期，再到另一个日期，中间经过格子间隙时不依赖单格 mouseleave 闪烁；仅离开整个网格才恢复选中日期
+  const grid = collectNodes(ui.get("daily-heatmap")).find(n => n.className === "heatmap-grid");
+  const cells = collectNodes(grid).filter(n => n.className === "hm-cell");
+  const cellEmpty = cells.find(c => c.dataset.date === "2026-11-20");
+  assert.equal(cellEmpty.mouseleave, undefined);
+  cellEmpty.mouseenter();
+  assert.equal(ui.get("daily-detail").textContent, "2026-11-20：无记录");
+  grid.mouseleave();
+  assert.match(ui.get("daily-detail").textContent, /^2026-11-27：10 次请求/);
+});
+
+test("collapsible turn history card defaults collapsed, fetches monitor/turns on expand, filters/paginates, and exposes sanitized per-turn metrics", async () => {
+  const turns25 = Array.from({length: 25}, (_, idx) => ({
+    recorded_at: `2026-11-28T10:${String(59 - idx).padStart(2, "0")}:00+00:00`,
+    model: "gemini-4-hydrogen",
+    negotiated_model: idx === 0 ? "gemini-4-hydrogen" : null,
+    mode: "tools",
+    status: idx === 1 ? "error" : idx === 2 ? "short_circuited" : "ok",
+    error_code: idx === 1 ? "TIMEOUT" : idx === 2 ? "RATE_LIMIT" : null,
+    usage_status: idx === 1 ? "unavailable" : idx === 2 ? "not_sent" : idx === 3 ? "reported" : "reported",
+    elapsed_ms: idx === 1 ? 30500 : 1200 + idx * 100,
+    input_other: idx === 1 ? null : idx === 2 ? 0 : 1000 + idx,
+    input_cached: idx === 1 ? null : idx === 2 ? 0 : idx === 3 ? null : 4000,
+    output: idx === 1 ? null : idx === 2 ? 0 : 250 + idx,
+    cache_fields_present: {cachedReadTokens: idx !== 3 && idx !== 1, cachedWriteTokens: false},
+    reused: idx % 2 === 0,
+    rebuild_reasons: idx % 2 === 0 ? [] : ["history_host_trim"],
+    prompt_bytes: 2048,
+    replay_bytes: idx % 2 === 0 ? 0 : 1024,
+    omitted_messages: idx === 0 ? 2 : 0,
+    body_bytes: 512,
+    thought_bytes: 128,
+    context_used: 12000,
+    context_window_size: 200000,
+    historical: idx >= 20,
+    turn_id: `abcdef012345${String(idx).padStart(4, "0")}`,
+    content_429_candidate: {system_hash8: "a1b2c3d4", system_bytes: 2048, has_output: false, attempt: 1},
+  }));
+
+  const mon = monitorPayload(null);
+  mon.schema_version = 2;
+  mon.instances[0].model = "gemini-4-hydrogen";
+  mon.instances[0].summary.total_turns = 25;
+  mon.instances[0].recent_turns = turns25.slice(0, 20);
+
+  let failTurnsEndpoint = false;
+  const ui = await boot(base(), {
+    apiGet: async (ep) => {
+      if (ep === "monitor/status") return mon;
+      if (ep === "monitor/turns") {
+        if (failTurnsEndpoint) throw new Error("[AGY:INTERNAL] 暂时不可用");
+        return {
+          schema_version: 1,
+          sampled_at: "2026-11-28T11:00:00+00:00",
+          window: {hours: 24, max_turns_per_instance: 100},
+          instances: [{
+            provider_id: "agy-main",
+            model: "gemini-4-hydrogen",
+            enabled: true,
+            effective_mode: "tools",
+            runtime_state: "active",
+            history_storage: "available",
+            total_turns: 25,
+            turns: turns25,
+          }],
+        };
+      }
+      return base();
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+
+  // 默认折叠且不主动发 monitor/turns 请求，但徽标和摘要预览直接展示
+  assert.equal(ui.get("turn-history-panel").hidden, true);
+  assert.equal(ui.get("turn-history-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(ui.getRequests.includes("monitor/turns"), false);
+  assert.equal(ui.get("turn-history-badge").textContent, "25 条");
+  assert.match(ui.get("turn-history-preview").textContent, /最新 1\.20 s · 成功 · 缓存命中 80\.0%/);
+
+  // 点击展开：拉取 monitor/turns（展示 25 条，第 1 页 20 条，支持翻页与详情展开）
+  ui.get("turn-history-toggle").onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.get("turn-history-panel").hidden, false);
+  assert.equal(ui.get("turn-history-toggle").getAttribute("aria-expanded"), "true");
+  assert.equal(ui.getRequests.filter(e => e === "monitor/turns").length, 1);
+  assert.equal(ui.get("turn-history-range-info").textContent, "第 1–20 / 25 条");
+
+  const bodyTexts = collectNodes(ui.get("turn-history-body")).map(n => n.textContent).filter(Boolean);
+  assert.ok(bodyTexts.includes("1.20 s"));
+  assert.ok(bodyTexts.includes("30.5 s"));
+  assert.ok(bodyTexts.includes("4,000"));
+  assert.ok(bodyTexts.includes("命中 80.0%"));
+  assert.ok(bodyTexts.includes("未报告")); // idx=3 缺缓存读取字段
+  assert.ok(bodyTexts.includes("未知"));   // idx=1 usage unavailable
+  assert.ok(bodyTexts.includes("失败 · 请求超时"));
+  assert.ok(bodyTexts.includes("重建 · 宿主裁剪历史"));
+  // 绝不泄露内部 hash 或原始 turn_id
+  assert.equal(bodyTexts.some(t => t.includes("a1b2c3d4") || t.includes("abcdef012345")), false);
+
+  // 展开首行详情，核验总计 Token 与发送/历史重放字节
+  const firstDetailBtn = collectNodes(ui.get("turn-history-body"))
+    .find(n => n.tag === "button" && n.classList.contains("turn-detail-btn"));
+  firstDetailBtn.click();
+  const detailTexts = collectNodes(ui.get("turn-history-body"))
+    .filter(n => n.className === "turn-detail-row")
+    .flatMap(r => collectNodes(r).map(n => n.textContent).filter(Boolean));
+  assert.ok(detailTexts.includes("5,000")); // 1000 + 4000
+  assert.ok(detailTexts.includes("5,250")); // 1000 + 4000 + 250
+  assert.ok(detailTexts.some(t => t.includes("裁剪 2 条")));
+
+  // 翻到第 2 页看到第 21-25 条（含重启前 historical 标记）
+  ui.get("turn-history-next").onclick();
+  assert.equal(ui.get("turn-history-range-info").textContent, "第 21–25 / 25 条");
+  const page2Texts = collectNodes(ui.get("turn-history-body")).map(n => n.textContent).filter(Boolean);
+  assert.ok(page2Texts.includes("重启前"));
+
+  // 状态筛选：仅看异常（idx=1 error + idx=2 short_circuited = 2 条）
+  ui.get("turn-history-status-abnormal").onclick();
+  assert.equal(ui.get("turn-history-range-info").textContent, "第 1–2 / 2 条");
+
+  // 切回全部，模拟 monitor/turns 拉取失败时保留降级提示与已有快照
+  ui.get("turn-history-status-all").onclick();
+  failTurnsEndpoint = true;
+  await ui.api.loadTurnHistory();
+  assert.equal(ui.get("turn-history-alert").hidden, false);
+  assert.match(ui.get("turn-history-alert").children[0].textContent, /回退展示/);
+
+  // 再次点击收起面板
+  ui.get("turn-history-toggle").onclick();
+  assert.equal(ui.get("turn-history-panel").hidden, true);
+  assert.equal(ui.get("turn-history-toggle").getAttribute("aria-expanded"), "false");
 });

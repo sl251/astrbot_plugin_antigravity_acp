@@ -19,7 +19,14 @@ let quotaRead, quotaPost, quotaVisitPending = true;
 // 每日用量与热力图状态（GET monitor/daily/{30|90|365}）
 let dailyDays = 90, dailyMetric = "requests", dailyModel = "";
 let dailyData = null, dailyLoading = false, dailyError = "", dailyFetchSeq = 0;
-let dailySelectedDate = null, dailyHoverDate = null, dailyCellButtons = new Map();
+let dailySelectedDate = null, dailyHoverDate = null, dailyRenderedSelectedDate = null, dailyCellButtons = new Map();
+
+// 历史调用记录面板状态（默认折叠，展开时按需拉取 GET monitor/turns）
+let turnHistoryOpen = false, turnHistoryAnimToken = 0;
+let turnHistoryData = null, turnHistoryLoading = false, turnHistoryError = "", turnHistoryFetchSeq = 0;
+let turnHistoryInstance = "", turnHistoryStatus = "all", turnHistoryPage = 0, turnHistoryRenderSig = "";
+const turnHistoryExpandedRows = new Set();
+const TURN_HISTORY_PAGE_SIZE = 20;
 
 // 工具权限状态（setup/status.tool_policy 与 POST setup/tool-policy）
 let toolPolicyServer = null, toolPolicyDraft = {}, toolPolicyDirty = false, toolPolicySaving = false;
@@ -38,6 +45,46 @@ const loginStates = {
 const effortLabels = {default: "CLI默认", low: "低", medium: "中", high: "高", invalid: "无效配置"};
 const toolsModeLabels = {chat: "纯聊天", inherit: "跟随总闸", tools: "工具模式", invalid: "无效配置"};
 const turnStatusLabels = {ok: "成功", error: "失败", cancelled: "取消", short_circuited: "预检/熔断拦截", unknown: "未知"};
+const rebuildReasonLabels = {
+  no_identity: "无会话标识",
+  abort: "请求中断",
+  previous_error: "上轮异常",
+  upstream_compaction_detected: "疑似上下文压缩",
+  process_dead: "子进程已退出",
+  idle_expired: "空闲超时回收",
+  pool_evicted: "会话池淘汰",
+  runtime_restart: "实例重启",
+  cold_start: "冷启动",
+  system_changed: "系统提示变更",
+  model_changed: "底层模型变更",
+  effort_changed: "思考档位变更",
+  tool_hash_changed: "工具列表变更",
+  tool_ledger_limit: "工具账本上限",
+  history_rewrite: "历史消息重写",
+  history_host_trim: "宿主裁剪历史",
+  history_append_gap: "历史断档",
+  unknown: "其他原因",
+};
+const fallbackReasonLabels = {
+  policy_denial: "策略拒绝，已禁止重放",
+  builtin_grant: "内置工具已授权，禁止重放",
+  builtin_observed: "内置工具已执行，禁止重放",
+  tool_handoff: "已交接宿主工具，禁止重放",
+  tool_continuation: "已进入工具续轮，禁止重放",
+  visible_prefix: "已输出可见正文，禁止重放",
+  no_visible_prefix: "无可见输出，保留备用模型资格",
+};
+const stopReasonLabels = {
+  end_turn: "正常结束",
+  max_tokens: "达到输出上限",
+  cancelled: "已取消",
+  error: "执行出错",
+  failed: "执行失败",
+  failure: "请求失败",
+  agent_error: "代理异常",
+  execution_error: "运行异常",
+  internal_error: "内部异常",
+};
 const transportLabels = {loopback_hmac: "本机认证连接", unix_socket: "Unix Socket", unsupported: "当前平台不支持"};
 const supervisionLabels = {windows_job: "Windows Job Object", windows_taskkill_fallback: "taskkill 回退", posix_process_group: "独立进程组"};
 const minimalToolsLabels = {inactive: "未启用精简", flag_available_unverified: "支持参数（待验收）", unsupported: "CLI 不支持"};
@@ -763,6 +810,7 @@ function renderMonitor(data) {
     $("monitor-message").textContent = data.instances.length ? "" : "尚未添加模型，请前往「模型管理」添加。";
     $("monitor-updated").textContent = `更新于 ${monitorShortTime(data.sampled_at)}`;
     monitorSnapshot = data;
+    renderTurnHistory();
     return;
   }
   monitorSignature = signature;
@@ -872,6 +920,587 @@ function renderMonitor(data) {
   $("monitor-message").textContent = cards.length ? "" : "尚未添加模型，请前往「模型管理」添加。";
   $("monitor-updated").textContent = `更新于 ${monitorShortTime(data.sampled_at)}`;
   monitorSnapshot = data;
+  renderTurnHistory();
+  if (turnHistoryOpen && monitorReady) {
+    loadTurnHistory();
+  }
+}
+
+// ---------- 历史调用记录（可折叠明细） ----------
+
+function getTurnCacheStats(turn) {
+  if (!turn || typeof turn !== "object") {
+    return {known: false, missingField: false, notSent: false, cached: null, hitRate: null};
+  }
+  if (turn.usage_status === "not_sent") {
+    return {known: true, missingField: false, notSent: true, cached: 0, hitRate: null};
+  }
+  if (turn.usage_status !== "reported") {
+    return {known: false, missingField: false, notSent: false, cached: null, hitRate: null};
+  }
+  if (turn.cache_fields_present?.cachedReadTokens === false) {
+    return {known: false, missingField: true, notSent: false, cached: null, hitRate: null};
+  }
+  const cached = Number.isFinite(turn.input_cached) ? turn.input_cached : null;
+  const other = Number.isFinite(turn.input_other) ? turn.input_other : null;
+  if (cached === null) {
+    return {known: false, missingField: false, notSent: false, cached: null, hitRate: null};
+  }
+  const totalInput = other !== null ? other + cached : null;
+  const hitRate = totalInput !== null && totalInput > 0 ? cached / totalInput : null;
+  return {known: true, missingField: false, notSent: false, cached, hitRate};
+}
+
+function getTurnHistorySource() {
+  const fullInstances = Array.isArray(turnHistoryData?.instances) ? turnHistoryData.instances : null;
+  const fallbackInstances = Array.isArray(monitorSnapshot?.instances) ? monitorSnapshot.instances : [];
+  const rawInstances = fullInstances || fallbackInstances;
+  const usingFull = Boolean(fullInstances);
+
+  const instanceMeta = [];
+  const allRows = [];
+  let totalReportedCount = 0;
+
+  rawInstances.forEach((inst) => {
+    if (!inst || typeof inst !== "object") return;
+    const providerId = typeof inst.provider_id === "string" ? inst.provider_id : "";
+    const model = typeof inst.model === "string" ? inst.model : "";
+    const turns = Array.isArray(usingFull ? inst.turns : inst.recent_turns)
+      ? (usingFull ? inst.turns : inst.recent_turns)
+      : [];
+    const declaredTotal = usingFull
+      ? (Number.isFinite(inst.total_turns) ? inst.total_turns : turns.length)
+      : (Number.isFinite(inst.summary?.total_turns) ? inst.summary.total_turns : turns.length);
+    if (inst.runtime_state === "active" || turns.length > 0) {
+      totalReportedCount += Math.max(declaredTotal, turns.length);
+      instanceMeta.push({
+        provider_id: providerId,
+        model,
+        label: model && providerId && model !== providerId ? `${model} (${providerId})` : (model || providerId || "未命名实例"),
+        count: Math.max(declaredTotal, turns.length),
+      });
+    }
+    turns.forEach((turn, idx) => {
+      if (!turn || typeof turn !== "object") return;
+      const stampMs = turn.recorded_at ? Date.parse(turn.recorded_at) : NaN;
+      const rowKey = turn.turn_id
+        ? `${providerId}:${turn.turn_id}`
+        : `${providerId}:${turn.recorded_at || "unknown"}:${turn.elapsed_ms ?? ""}:${idx}`;
+      allRows.push({
+        ...turn,
+        _providerId: providerId,
+        _instanceLabel: model || providerId || "未知实例",
+        _stampMs: Number.isFinite(stampMs) ? stampMs : -idx,
+        _order: idx,
+        _rowKey: rowKey,
+      });
+    });
+  });
+
+  allRows.sort((a, b) => (b._stampMs - a._stampMs) || (a._order - b._order));
+  return {
+    rows: allRows,
+    instances: instanceMeta,
+    usingFull,
+    totalCount: Math.max(totalReportedCount, allRows.length),
+  };
+}
+
+function formatTurnPreview(rows) {
+  if (!rows.length) return "近 24 小时暂无记录";
+  const latest = rows[0];
+  const parts = [`最新 ${formatDuration(latest.elapsed_ms)}`];
+  parts.push(latest.status === "ok" ? "成功" : (turnStatusLabels[latest.status] || "异常"));
+  const cacheInfo = getTurnCacheStats(latest);
+  if (cacheInfo.hitRate !== null) {
+    parts.push(`缓存命中 ${monitorPercent(cacheInfo.hitRate)}`);
+  } else if (Number.isFinite(latest.input_other) || Number.isFinite(latest.output)) {
+    const ioParts = [];
+    if (Number.isFinite(latest.input_other)) ioParts.push(`入 ${formatCompactTokens(latest.input_other)}`);
+    if (Number.isFinite(latest.output)) ioParts.push(`出 ${formatCompactTokens(latest.output)}`);
+    if (ioParts.length) parts.push(ioParts.join(" · "));
+  }
+  return parts.join(" · ");
+}
+
+function buildTurnDetailRow(turn) {
+  const tr = el("tr", "turn-detail-row");
+  const td = el("td", "turn-detail-cell");
+  td.colSpan = 8;
+  td.setAttribute("colspan", "8");
+
+  const grid = el("dl", "turn-detail-grid");
+  const addDetail = (label, value) => {
+    const item = el("div", "turn-detail-item");
+    item.append(el("dt", "", label), el("dd", "", value));
+    grid.append(item);
+  };
+
+  const cacheStats = getTurnCacheStats(turn);
+  const inOther = Number.isFinite(turn.input_other) ? turn.input_other : null;
+  const inCached = cacheStats.known ? cacheStats.cached : null;
+  const output = Number.isFinite(turn.output) ? turn.output : null;
+
+  let totalInText = "未知";
+  if (turn.usage_status === "not_sent") totalInText = "0（未发送请求）";
+  else if (inOther !== null && inCached !== null) totalInText = monitorCount(inOther + inCached);
+  else if (inOther !== null && cacheStats.missingField) totalInText = `${monitorCount(inOther)}（未含未报告缓存）`;
+
+  let totalTokText = "未知";
+  if (turn.usage_status === "not_sent") totalTokText = "0";
+  else if (inOther !== null && inCached !== null && output !== null) totalTokText = monitorCount(inOther + inCached + output);
+  else if (inOther !== null && output !== null && cacheStats.missingField) totalTokText = "未知（缺缓存读取字段）";
+
+  addDetail("总输入 Token", totalInText);
+  addDetail("总计 Token", totalTokText);
+  addDetail("上游协商模型", turn.negotiated_model || "未报告");
+
+  const ctxText = Number.isFinite(turn.context_used) && Number.isFinite(turn.context_window_size)
+    ? `${monitorCount(turn.context_used)} / ${monitorCount(turn.context_window_size)}`
+    : "未报告";
+  addDetail("上下文窗口采样", ctxText);
+
+  const promptText = Number.isFinite(turn.prompt_bytes) ? `${monitorCount(turn.prompt_bytes)} B` : "未知";
+  const replayText = Number.isFinite(turn.replay_bytes) ? `${monitorCount(turn.replay_bytes)} B` : "未知";
+  const omitPart = Number.isFinite(turn.omitted_messages) && turn.omitted_messages > 0
+    ? ` · 裁剪 ${monitorCount(turn.omitted_messages)} 条`
+    : "";
+  addDetail("发送 / 历史重放", `提示 ${promptText} · 重放 ${replayText}${omitPart}`);
+
+  const reasons = Array.isArray(turn.rebuild_reasons) && turn.rebuild_reasons.length
+    ? turn.rebuild_reasons.map(r => rebuildReasonLabels[r] || r).join("、")
+    : (turn.usage_status === "not_sent" ? "未发送请求" : turn.reused ? "无（会话直接复用）" : "无");
+  addDetail("会话重建原因", reasons);
+
+  if (Number.isFinite(turn.body_bytes) || Number.isFinite(turn.thought_bytes)) {
+    const bodyText = Number.isFinite(turn.body_bytes) ? `${monitorCount(turn.body_bytes)} B` : "未知";
+    const thoughtText = Number.isFinite(turn.thought_bytes) ? `${monitorCount(turn.thought_bytes)} B` : "未知";
+    addDetail("输出字节（正文 / 思考）", `${bodyText} / ${thoughtText}`);
+  }
+  if (turn.stop_reason) {
+    addDetail("终止原因", stopReasonLabels[turn.stop_reason] || turn.stop_reason);
+  }
+  if (turn.fallback_reason) {
+    addDetail("异常重放边界", fallbackReasonLabels[turn.fallback_reason] || turn.fallback_reason);
+  }
+  if (Number.isFinite(turn.filtered_notice_count) && turn.filtered_notice_count > 0) {
+    addDetail("过滤告警数", monitorCount(turn.filtered_notice_count));
+  }
+  if (Number.isFinite(turn.permission_denial_count) && turn.permission_denial_count > 0) {
+    addDetail("工具权限拒绝数", monitorCount(turn.permission_denial_count));
+  }
+
+  td.append(grid);
+  tr.append(td);
+  return tr;
+}
+
+function renderTurnHistory() {
+  const card = $("turn-history-card");
+  const toggleBtn = $("turn-history-toggle");
+  const toggleText = $("turn-history-toggle-text");
+  const refreshBtn = $("turn-history-refresh");
+  const badgeEl = $("turn-history-badge");
+  const previewEl = $("turn-history-preview");
+  const alertEl = $("turn-history-alert");
+  const instanceSelect = $("turn-history-instance");
+  const summaryEl = $("turn-history-summary");
+  const bodyEl = $("turn-history-body");
+  const rangeInfoEl = $("turn-history-range-info");
+  const prevBtn = $("turn-history-prev");
+  const nextBtn = $("turn-history-next");
+
+  card.classList.toggle("is-collapsed", !turnHistoryOpen);
+  toggleBtn.setAttribute("aria-expanded", String(turnHistoryOpen));
+  toggleText.textContent = turnHistoryOpen ? "收起" : "展开记录";
+  refreshBtn.hidden = !turnHistoryOpen;
+  refreshBtn.disabled = !turnHistoryOpen || turnHistoryLoading || !monitorReady;
+  refreshBtn.textContent = turnHistoryLoading ? "刷新中…" : "刷新记录";
+
+  const source = getTurnHistorySource();
+  badgeEl.textContent = source.totalCount > 0 ? `${monitorCount(source.totalCount)} 条` : "0 条";
+  badgeEl.dataset.state = source.totalCount > 0 ? "primary" : "";
+  previewEl.textContent = turnHistoryOpen ? "" : formatTurnPreview(source.rows);
+
+  if (!turnHistoryOpen) return;
+
+  // 同步实例下拉框
+  const instIds = source.instances.map(i => i.provider_id);
+  if (turnHistoryInstance && !instIds.includes(turnHistoryInstance)) turnHistoryInstance = "";
+  const instOptSig = JSON.stringify(source.instances.map(i => [i.provider_id, i.label, i.count]));
+  if (listSignatures.get(instanceSelect) !== instOptSig) {
+    instanceSelect.replaceChildren(
+      new Option("全部实例", ""),
+      ...source.instances.map(i => new Option(`${i.label} (${i.count})`, i.provider_id)),
+    );
+    listSignatures.set(instanceSelect, instOptSig);
+  }
+  if (instanceSelect.value !== turnHistoryInstance) instanceSelect.value = turnHistoryInstance;
+  instanceSelect.disabled = source.instances.length <= 1;
+
+  // 同步状态分段按钮
+  for (const statusKey of ["all", "ok", "abnormal"]) {
+    const btn = $(`turn-history-status-${statusKey}`);
+    if (!btn) continue;
+    const active = turnHistoryStatus === statusKey;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", String(active));
+  }
+
+  // 错误/降级提示
+  if (turnHistoryError) {
+    const msg = source.rows.length
+      ? `${turnHistoryError}（当前回退展示最近 ${source.rows.length} 条监控快照）`
+      : turnHistoryError;
+    const span = el("span", "", msg);
+    const retryBtn = el("button", "btn btn-sm", "重试");
+    retryBtn.type = "button";
+    retryBtn.disabled = turnHistoryLoading;
+    retryBtn.addEventListener("click", () => loadTurnHistory());
+    alertEl.replaceChildren(span, retryBtn);
+    alertEl.hidden = false;
+  } else {
+    alertEl.replaceChildren();
+    alertEl.hidden = true;
+  }
+
+  const filtered = source.rows.filter((turn) => {
+    if (turnHistoryInstance && turn._providerId !== turnHistoryInstance) return false;
+    if (turnHistoryStatus === "ok" && turn.status !== "ok") return false;
+    if (turnHistoryStatus === "abnormal" && turn.status === "ok") return false;
+    return true;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TURN_HISTORY_PAGE_SIZE));
+  if (turnHistoryPage >= totalPages) turnHistoryPage = totalPages - 1;
+  if (turnHistoryPage < 0) turnHistoryPage = 0;
+
+  const pageStart = turnHistoryPage * TURN_HISTORY_PAGE_SIZE;
+  const pageRows = filtered.slice(pageStart, pageStart + TURN_HISTORY_PAGE_SIZE);
+  prevBtn.disabled = turnHistoryPage <= 0;
+  nextBtn.disabled = turnHistoryPage + 1 >= totalPages;
+  rangeInfoEl.textContent = filtered.length
+    ? `第 ${pageStart + 1}–${pageStart + pageRows.length} / ${filtered.length} 条`
+    : "0 条匹配";
+
+  // 计算当前筛选集的汇总指标（未知绝不填 0）
+  let okCount = 0, abnormalCount = 0;
+  let timedCount = 0, sumMs = 0, maxMs = 0;
+  let sumInputOther = 0, hasInputOther = false;
+  let sumOutput = 0, hasOutput = false;
+  let sumCached = 0, hasCached = false;
+  let checkedInputOther = 0, checkedCached = 0, reportedCount = 0, missingCacheCount = 0;
+
+  filtered.forEach((turn) => {
+    if (turn.status === "ok") okCount++;
+    else abnormalCount++;
+    if (Number.isFinite(turn.elapsed_ms)) {
+      timedCount++;
+      sumMs += turn.elapsed_ms;
+      if (turn.elapsed_ms > maxMs) maxMs = turn.elapsed_ms;
+    }
+    if (turn.usage_status === "reported") reportedCount++;
+    if (Number.isFinite(turn.input_other)) {
+      sumInputOther += turn.input_other;
+      hasInputOther = true;
+    }
+    if (Number.isFinite(turn.output)) {
+      sumOutput += turn.output;
+      hasOutput = true;
+    }
+    const cs = getTurnCacheStats(turn);
+    if (cs.missingField) missingCacheCount++;
+    if (cs.known && cs.cached !== null) {
+      sumCached += cs.cached;
+      hasCached = true;
+      if (!cs.notSent && Number.isFinite(turn.input_other)) {
+        checkedInputOther += turn.input_other;
+        checkedCached += cs.cached;
+      }
+    }
+  });
+
+  const renderSig = JSON.stringify([
+    pageRows, turnHistoryInstance, turnHistoryStatus, turnHistoryPage,
+    [...turnHistoryExpandedRows], source.usingFull, turnHistoryLoading,
+  ]);
+  if (turnHistoryRenderSig === renderSig) return;
+  turnHistoryRenderSig = renderSig;
+
+  const checkedTotalInput = checkedInputOther + checkedCached;
+  const avgMs = timedCount > 0 ? Math.round(sumMs / timedCount) : null;
+  const hitRateText = checkedTotalInput > 0 ? monitorPercent(checkedCached / checkedTotalInput) : "未知";
+
+  const makeSummaryItem = (label, value, sub) => {
+    const box = el("div", "turn-summary-item");
+    box.append(el("span", "turn-summary-label", label), el("span", "turn-summary-value", value));
+    if (sub) box.append(el("span", "turn-summary-sub", sub));
+    return box;
+  };
+
+  const canSumAllReported = hasInputOther && hasOutput && missingCacheCount === 0;
+  const summaryItems = [
+    makeSummaryItem(
+      "调用次数",
+      `${monitorCount(filtered.length)} 次`,
+      filtered.length ? `成功 ${monitorCount(okCount)} · 异常 ${monitorCount(abnormalCount)}` : "无匹配样本",
+    ),
+    makeSummaryItem(
+      "平均用时",
+      avgMs !== null ? formatDuration(avgMs) : "未知",
+      timedCount > 0 ? `峰值 ${formatDuration(maxMs)} · ${timedCount} 轮有计时` : "暂无计时数据",
+    ),
+    makeSummaryItem(
+      "非缓存输入",
+      hasInputOther ? monitorCount(sumInputOther) : "未知",
+      reportedCount > 0 ? `已上报 ${monitorCount(reportedCount)} 轮` : "暂无上报用量",
+    ),
+    makeSummaryItem(
+      "缓存命中",
+      hasCached ? monitorCount(sumCached) : (reportedCount > 0 && reportedCount === missingCacheCount ? "未报告" : "未知"),
+      checkedTotalInput > 0 ? `缓存命中率 ${hitRateText}` : (missingCacheCount > 0 ? `${monitorCount(missingCacheCount)} 轮缺缓存字段` : "暂无命中率样本"),
+    ),
+    makeSummaryItem(
+      "输出 Token",
+      hasOutput ? monitorCount(sumOutput) : "未知",
+      canSumAllReported ? `输入+输出 ${formatCompactTokens(sumInputOther + (hasCached ? sumCached : 0) + sumOutput)}` : "含已报告输出",
+    ),
+  ];
+
+  summaryEl.replaceChildren(...summaryItems);
+
+  if (turnHistoryLoading && !source.rows.length) {
+    bodyEl.replaceChildren(el("div", "turn-history-empty", "正在加载历史调用记录…"));
+    return;
+  }
+
+  if (!filtered.length) {
+    bodyEl.replaceChildren(el("div", "turn-history-empty", source.rows.length ? "当前筛选条件下没有匹配的调用记录。" : "近 24 小时暂无本地调用记录。"));
+    return;
+  }
+
+  const wrap = el("div", "turn-history-table-wrap");
+  wrap.setAttribute("tabindex", "0");
+  wrap.setAttribute("role", "region");
+  wrap.setAttribute("aria-labelledby", "turn-history-heading");
+
+  const table = el("table", "turn-history-table");
+  const thead = el("thead");
+  const headRow = el("tr");
+  [
+    ["时间", ""],
+    ["状态", ""],
+    ["模型与会话", ""],
+    ["耗时", "col-num"],
+    ["非缓存输入", "col-num"],
+    ["缓存命中", "col-num"],
+    ["输出", "col-num"],
+    ["明细", "col-num"],
+  ].forEach(([label, cls]) => {
+    const th = el("th", cls, label);
+    th.setAttribute("scope", "col");
+    headRow.append(th);
+  });
+  thead.append(headRow);
+
+  const tbody = el("tbody");
+  const showInstanceTag = source.instances.length > 1 && !turnHistoryInstance;
+
+  pageRows.forEach((turn) => {
+    const tr = el("tr", "turn-row");
+
+    // 1. 时间（表头单元格，移动端作为卡片标题）
+    const timeTh = el("th");
+    timeTh.setAttribute("scope", "row");
+    const parsedTime = turn.recorded_at ? new Date(turn.recorded_at) : null;
+    const mainTimeText = parsedTime && Number.isFinite(parsedTime.getTime())
+      ? formatLocalShortDateTime(parsedTime) + ":" + String(parsedTime.getSeconds()).padStart(2, "0")
+      : "时间未知";
+    timeTh.append(el("span", "turn-row-main", mainTimeText));
+    const timeSub = el("div", "turn-row-sub");
+    timeSub.append(el("span", "", monitorAgo(turn.recorded_at)));
+    if (turn.historical) timeSub.append(el("span", "turn-chip", "重启前"));
+    if (showInstanceTag && turn._providerId) timeSub.append(el("span", "turn-chip", turn._providerId));
+    timeTh.append(timeSub);
+
+    // 2. 状态
+    const statusTd = el("td");
+    const statusBadge = el("span", "badge");
+    if (turn.status === "ok") {
+      statusBadge.textContent = "成功";
+      statusBadge.dataset.state = "ready";
+    } else if (turn.status === "cancelled") {
+      statusBadge.textContent = "已取消";
+      statusBadge.dataset.state = "warn";
+    } else if (turn.status === "short_circuited") {
+      statusBadge.textContent = turn.error_code ? `拦截 · ${formatFaultBrief(turn.error_code)}` : "预检拦截";
+      statusBadge.dataset.state = "warn";
+    } else {
+      statusBadge.textContent = turn.error_code ? `失败 · ${formatFaultBrief(turn.error_code)}` : "失败";
+      statusBadge.dataset.state = "error";
+    }
+    statusTd.append(statusBadge);
+
+    // 3. 模型与会话复用
+    const modelTd = el("td");
+    const modelCell = el("div", "turn-model-cell");
+    modelCell.append(el("span", "turn-model-name", turn.model || "未知模型"));
+    const metaTags = el("div", "turn-meta-tags");
+    metaTags.append(el("span", "turn-chip", turn.mode === "tools" ? "工具模式" : turn.mode === "chat" ? "纯聊天" : "未知模式"));
+    if (turn.usage_status === "not_sent") {
+      metaTags.append(el("span", "turn-chip is-warn", "未发请求"));
+    } else if (turn.reused) {
+      metaTags.append(el("span", "turn-chip is-ok", "会话复用"));
+    } else {
+      const reason = Array.isArray(turn.rebuild_reasons) && turn.rebuild_reasons.length
+        ? (rebuildReasonLabels[turn.rebuild_reasons[0]] || turn.rebuild_reasons[0])
+        : "新建会话";
+      metaTags.append(el("span", "turn-chip is-primary", `重建 · ${reason}`));
+    }
+    modelCell.append(metaTags);
+    modelTd.append(modelCell);
+
+    // 4. 用时
+    const durTd = el("td", "col-num");
+    durTd.append(el("span", "turn-num-strong", Number.isFinite(turn.elapsed_ms) ? formatDuration(turn.elapsed_ms) : "未知"));
+
+    // 5. 非缓存输入 Token
+    const inOtherTd = el("td", "col-num");
+    if (turn.usage_status === "not_sent") {
+      inOtherTd.append(el("span", "turn-num-strong", "0"), el("span", "turn-num-sub", "未发送"));
+    } else if (Number.isFinite(turn.input_other)) {
+      inOtherTd.append(el("span", "turn-num-strong", monitorCount(turn.input_other)));
+    } else {
+      inOtherTd.append(el("span", "turn-num-sub", "未知"));
+    }
+
+    // 6. 缓存命中 Token 与命中率
+    const cachedTd = el("td", "col-num");
+    const cacheInfo = getTurnCacheStats(turn);
+    if (cacheInfo.notSent) {
+      cachedTd.append(el("span", "turn-num-strong", "0"), el("span", "turn-num-sub", "未发送"));
+    } else if (cacheInfo.missingField) {
+      cachedTd.append(el("span", "turn-num-sub", "未报告"));
+    } else if (cacheInfo.known && cacheInfo.cached !== null) {
+      cachedTd.append(el("span", "turn-num-strong", monitorCount(cacheInfo.cached)));
+      if (cacheInfo.hitRate !== null) {
+        cachedTd.append(el("span", "turn-num-sub", `命中 ${monitorPercent(cacheInfo.hitRate)}`));
+      }
+    } else {
+      cachedTd.append(el("span", "turn-num-sub", "未知"));
+    }
+
+    // 7. 输出 Token
+    const outTd = el("td", "col-num");
+    if (turn.usage_status === "not_sent") {
+      outTd.append(el("span", "turn-num-strong", "0"), el("span", "turn-num-sub", "未发送"));
+    } else if (Number.isFinite(turn.output)) {
+      outTd.append(el("span", "turn-num-strong", monitorCount(turn.output)));
+    } else {
+      outTd.append(el("span", "turn-num-sub", "未知"));
+    }
+
+    // 8. 展开详情按钮
+    const actTd = el("td", "col-num");
+    const expanded = turnHistoryExpandedRows.has(turn._rowKey);
+    const detailBtn = el("button", "btn btn-ghost btn-sm turn-detail-btn", expanded ? "收起" : "详情");
+    detailBtn.type = "button";
+    detailBtn.setAttribute("aria-expanded", String(expanded));
+    detailBtn.addEventListener("click", () => {
+      if (turnHistoryExpandedRows.has(turn._rowKey)) turnHistoryExpandedRows.delete(turn._rowKey);
+      else turnHistoryExpandedRows.add(turn._rowKey);
+      turnHistoryRenderSig = "";
+      renderTurnHistory();
+    });
+    actTd.append(detailBtn);
+
+    tr.append(timeTh, statusTd, modelTd, durTd, inOtherTd, cachedTd, outTd, actTd);
+    tbody.append(tr);
+    if (expanded) {
+      tbody.append(buildTurnDetailRow(turn));
+    }
+  });
+
+  table.append(thead, tbody);
+  wrap.append(table);
+  bodyEl.replaceChildren(wrap);
+}
+
+function toggleTurnHistory(forceOpen) {
+  const next = typeof forceOpen === "boolean" ? forceOpen : !turnHistoryOpen;
+  if (next === turnHistoryOpen) return;
+  turnHistoryOpen = next;
+  const token = ++turnHistoryAnimToken;
+  const panel = $("turn-history-panel");
+  turnHistoryRenderSig = "";
+
+  if (next) {
+    panel.hidden = false;
+    const activate = () => {
+      if (!disposed && turnHistoryOpen && token === turnHistoryAnimToken) {
+        panel.classList.add("is-open");
+      }
+    };
+    if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(activate);
+    else activate();
+    renderTurnHistory();
+    loadTurnHistory();
+  } else {
+    panel.classList.remove("is-open");
+    renderTurnHistory();
+    const transitions = typeof panel.getAnimations === "function"
+      ? panel.getAnimations().filter(anim => anim.transitionProperty === "block-size" || anim.transitionProperty === "opacity")
+      : [];
+    if (transitions.length) {
+      Promise.allSettled(transitions.map(t => t.finished)).then(() => {
+        if (!disposed && !turnHistoryOpen && token === turnHistoryAnimToken) {
+          panel.hidden = true;
+        }
+      });
+    } else {
+      panel.hidden = true;
+    }
+  }
+}
+
+async function loadTurnHistory() {
+  if (disposed || suspended || !monitorReady || !turnHistoryOpen) return;
+  const seq = ++turnHistoryFetchSeq;
+  const epoch = refreshEpoch;
+  turnHistoryLoading = true;
+  turnHistoryError = "";
+  renderTurnHistory();
+  try {
+    const data = await bridge.apiGet("monitor/turns");
+    if (disposed || epoch !== refreshEpoch || seq !== turnHistoryFetchSeq) return;
+    if (!data || data.schema_version !== 1 || !Array.isArray(data.instances)) {
+      throw new Error("turns schema");
+    }
+    turnHistoryData = data;
+    turnHistoryLoading = false;
+    turnHistoryRenderSig = "";
+    renderTurnHistory();
+  } catch (error) {
+    if (disposed || epoch !== refreshEpoch || seq !== turnHistoryFetchSeq) return;
+    turnHistoryLoading = false;
+    if (error?.message === "turns schema") {
+      turnHistoryRenderSig = "";
+      renderTurnHistory();
+      return;
+    }
+    const parsed = parseBridgeError(error);
+    if (isAuthDeniedError(error)) {
+      turnHistoryError = "无权读取历史调用记录或登录已过期，请使用 AstrBot 管理员账号登录后重试。";
+    } else if (parsed.code === "CLOSED" || (!parsed.code && parsed.status === 503)) {
+      turnHistoryError = "插件已停用，请启用插件后重试。";
+    } else if (parsed.code === "CSRF_EXPIRED") {
+      turnHistoryError = "页面已过期，请刷新页面后重试。";
+    } else {
+      turnHistoryError = "完整历史记录拉取失败，请稍后重试。";
+    }
+    turnHistoryRenderSig = "";
+    renderTurnHistory();
+  }
 }
 
 // ---------- 官方 CLI 账号额度 ----------
@@ -1260,10 +1889,18 @@ function updateDailyDetail(dayMap) {
   const targetDate = dailyHoverDate || dailySelectedDate;
   const entry = targetDate ? (dayMap.get(targetDate) || null) : null;
   detailEl.textContent = formatDayDetailText(targetDate, entry);
-  for (const [dateStr, btn] of dailyCellButtons.entries()) {
-    const selected = dateStr === dailySelectedDate;
-    btn.classList.toggle("is-selected", selected);
-    btn.setAttribute("aria-pressed", String(selected));
+  if (dailyRenderedSelectedDate !== dailySelectedDate) {
+    const prevBtn = dailyRenderedSelectedDate ? dailyCellButtons.get(dailyRenderedSelectedDate) : null;
+    if (prevBtn) {
+      prevBtn.classList.remove("is-selected");
+      prevBtn.setAttribute("aria-pressed", "false");
+    }
+    const nextBtn = dailySelectedDate ? dailyCellButtons.get(dailySelectedDate) : null;
+    if (nextBtn) {
+      nextBtn.classList.add("is-selected");
+      nextBtn.setAttribute("aria-pressed", "true");
+    }
+    dailyRenderedSelectedDate = dailySelectedDate;
   }
 }
 
@@ -1463,21 +2100,26 @@ function renderDaily(nextData) {
 
   const board = el("div", "heatmap-board");
 
-  // 月份标签行
+  // 月份标签行：相邻两列宽度仅 19px，避免首周不足一周跨月时（如 10月/11月）发生文本重叠
   const monthsRow = el("div", "heatmap-months");
   monthsRow.setAttribute("aria-hidden", "true");
-  let lastMonth = -1;
+  const weekMonths = [];
   for (let w = 0; w < totalWeeks; w++) {
-    const firstSlotIdx = w * 7;
-    const dayIdx = firstSlotIdx - leadingPads;
-    const sampleIdx = dayIdx < 0 ? 0 : dayIdx;
-    const cellInfo = calendarDates[sampleIdx];
+    const dayIdx = w * 7 - leadingPads;
+    const cellInfo = calendarDates[dayIdx < 0 ? 0 : dayIdx];
+    weekMonths.push(cellInfo ? new Date(cellInfo.utcMs).getUTCMonth() + 1 : -1);
+  }
+  let lastMonth = -1;
+  let lastLabelWeek = -99;
+  for (let w = 0; w < totalWeeks; w++) {
+    const m = weekMonths[w];
     const span = el("span", "heatmap-month-label", "");
-    if (cellInfo) {
-      const m = new Date(cellInfo.utcMs).getUTCMonth() + 1;
-      if (m !== lastMonth) {
+    const nextWeekChangesMonth = w + 1 < totalWeeks && weekMonths[w + 1] !== m;
+    if (m !== -1 && m !== lastMonth) {
+      lastMonth = m;
+      if (!(w === 0 && nextWeekChangesMonth) && w - lastLabelWeek >= 2) {
         span.textContent = `${m}月`;
-        lastMonth = m;
+        lastLabelWeek = w;
       }
     }
     monthsRow.append(span);
@@ -1490,18 +2132,31 @@ function renderDaily(nextData) {
   ["", "一", "", "三", "", "五", ""].forEach(label => weekdaysCol.append(el("span", "heatmap-weekday", label)));
   board.append(weekdaysCol);
 
-  // 日期格子网格
+  // 日期格子网格（由网格容器统一处理 mouseleave，消除跨越 4px 间隙时的详情闪烁）
   const grid = el("div", "heatmap-grid");
   grid.setAttribute("role", "group");
   grid.setAttribute("aria-label", `近 ${rangeDays} 天每日${dailyMetric === "tokens" ? " Token " : "请求"}热力图`);
+  grid.addEventListener("mouseleave", () => {
+    if (dailyHoverDate !== null) {
+      dailyHoverDate = null;
+      updateDailyDetail(dayMap);
+    }
+  });
 
   for (let i = 0; i < leadingPads; i++) {
     const pad = el("span", "hm-pad");
     pad.setAttribute("aria-hidden", "true");
+    pad.addEventListener("mouseenter", () => {
+      if (dailyHoverDate !== null) {
+        dailyHoverDate = null;
+        updateDailyDetail(dayMap);
+      }
+    });
     grid.append(pad);
   }
 
   let hasUnknownCell = false;
+  dailyRenderedSelectedDate = dailySelectedDate;
   calendarDates.forEach(({date}, idx) => {
     const entry = dayMap.get(date) || null;
     const level = getHeatmapLevel(entry, dailyMetric, thresholds);
@@ -1514,20 +2169,20 @@ function renderDaily(nextData) {
     btn.setAttribute("aria-pressed", String(date === dailySelectedDate));
     if (date === dailySelectedDate) btn.classList.add("is-selected");
     btn.addEventListener("mouseenter", () => {
-      dailyHoverDate = date;
-      updateDailyDetail(dayMap);
-    });
-    btn.addEventListener("mouseleave", () => {
-      if (dailyHoverDate === date) {
-        dailyHoverDate = null;
+      if (dailyHoverDate !== date) {
+        dailyHoverDate = date;
         updateDailyDetail(dayMap);
       }
     });
     btn.addEventListener("focus", () => {
-      dailyHoverDate = date;
-      updateDailyDetail(dayMap);
+      if (dailyHoverDate !== date) {
+        dailyHoverDate = date;
+        updateDailyDetail(dayMap);
+      }
     });
-    btn.addEventListener("blur", () => {
+    btn.addEventListener("blur", (event) => {
+      const next = event?.relatedTarget;
+      if (next && typeof grid.contains === "function" && grid.contains(next)) return;
       if (dailyHoverDate === date) {
         dailyHoverDate = null;
         updateDailyDetail(dayMap);
@@ -2497,6 +3152,32 @@ $("tool-policy-goto-models").onclick = () => switchTab("models");
 $("monitor-refresh").onclick = () => {
   refreshMonitor();
   loadDailyUsage(dailyDays);
+  if (turnHistoryOpen) loadTurnHistory();
+};
+$("turn-history-toggle").onclick = () => toggleTurnHistory();
+$("turn-history-refresh").onclick = () => loadTurnHistory();
+$("turn-history-instance").onchange = () => {
+  turnHistoryInstance = $("turn-history-instance").value;
+  turnHistoryPage = 0;
+  turnHistoryRenderSig = "";
+  renderTurnHistory();
+};
+$("turn-history-status-all").onclick = () => {
+  if (turnHistoryStatus !== "all") { turnHistoryStatus = "all"; turnHistoryPage = 0; turnHistoryRenderSig = ""; renderTurnHistory(); }
+};
+$("turn-history-status-ok").onclick = () => {
+  if (turnHistoryStatus !== "ok") { turnHistoryStatus = "ok"; turnHistoryPage = 0; turnHistoryRenderSig = ""; renderTurnHistory(); }
+};
+$("turn-history-status-abnormal").onclick = () => {
+  if (turnHistoryStatus !== "abnormal") { turnHistoryStatus = "abnormal"; turnHistoryPage = 0; turnHistoryRenderSig = ""; renderTurnHistory(); }
+};
+$("turn-history-prev").onclick = () => {
+  if (turnHistoryPage > 0) { turnHistoryPage--; turnHistoryRenderSig = ""; renderTurnHistory(); }
+};
+$("turn-history-next").onclick = () => {
+  turnHistoryPage++;
+  turnHistoryRenderSig = "";
+  renderTurnHistory();
 };
 $("quota-refresh").onclick = refreshQuotaManual;
 $("daily-range-30").onclick = () => { if (dailyDays !== 30) loadDailyUsage(30); };
@@ -2613,6 +3294,7 @@ function pauseRefresh() {
   quotaVisitPending = true;
   quotaSnapshot = null;
   quotaRequestError = "";
+  turnHistoryLoading = false;
   clearTimeout(timer);
   clearTimeout(monitorTimer);
   clearTimeout(quotaCountdownTimer);
@@ -2624,6 +3306,7 @@ function resumeRefresh() {
   if (disposed || suspended || document.hidden || !monitorReady) return;
   poll();
   refreshMonitor();
+  if (turnHistoryOpen) loadTurnHistory();
   renderQuota();
   checkQuotaOnEntry();
 }
@@ -2643,6 +3326,8 @@ window.addEventListener("pagehide", (event = {}) => {
   monitorSnapshot = undefined;
   quotaSnapshot = null;
   dailyData = null;
+  turnHistoryData = null;
+  turnHistoryExpandedRows.clear();
   toolPolicyServer = null;
   toolPolicyDraft = {};
   $("auth-code").value = "";
@@ -2667,6 +3352,7 @@ if (!bridge) {
       applyTheme();
       switchTab("monitor");
       renderQuota();
+      renderTurnHistory();
       renderToolPolicy();
       refreshMonitor();
       loadDailyUsage(dailyDays);

@@ -69,6 +69,52 @@
         </div>
       </section>
 
+      <section class="card turn-history-card is-collapsed" id="turn-history-card" aria-labelledby="turn-history-heading">
+        <div class="card-head turn-history-head">
+          <div class="card-title">
+            <h2 id="turn-history-heading">历史调用记录</h2>
+            <span class="tag">近 24 小时</span>
+            <span id="turn-history-badge" class="badge">0 条</span>
+            <span id="turn-history-preview" class="small"></span>
+          </div>
+          <div class="card-head-actions">
+            <button id="turn-history-refresh" class="btn btn-ghost btn-sm" type="button" hidden disabled>刷新记录</button>
+            <button id="turn-history-toggle" class="btn btn-sm turn-history-toggle" type="button" aria-expanded="false" aria-controls="turn-history-panel">
+              <span id="turn-history-toggle-text">展开记录</span>
+              <span class="turn-history-chevron" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+        <div id="turn-history-panel" class="turn-history-panel" hidden>
+          <div id="turn-history-alert" class="alert alert-warn alert-row" role="status" hidden></div>
+          <div class="turn-history-toolbar">
+            <div class="turn-history-filters">
+              <div class="turn-history-select-wrap">
+                <label for="turn-history-instance" class="visually-hidden">按实例筛选</label>
+                <select id="turn-history-instance" class="select-sm" aria-label="按实例筛选">
+                  <option value="">全部实例</option>
+                </select>
+              </div>
+              <div class="seg-group" role="group" aria-label="调用状态筛选">
+                <button id="turn-history-status-all" class="seg-btn is-active" type="button" aria-pressed="true">全部</button>
+                <button id="turn-history-status-ok" class="seg-btn" type="button" aria-pressed="false">成功</button>
+                <button id="turn-history-status-abnormal" class="seg-btn" type="button" aria-pressed="false">异常</button>
+              </div>
+            </div>
+            <div class="turn-history-pager">
+              <span id="turn-history-range-info" class="small"></span>
+              <div class="seg-group" role="group" aria-label="记录分页">
+                <button id="turn-history-prev" class="seg-btn" type="button" disabled>上一页</button>
+                <button id="turn-history-next" class="seg-btn" type="button" disabled>下一页</button>
+              </div>
+            </div>
+          </div>
+          <div id="turn-history-summary" class="turn-history-summary"></div>
+          <div id="turn-history-body" class="turn-history-body"></div>
+          <p id="turn-history-footnote" class="small">以上展示近 24 小时每实例最多 100 轮脱敏调用记录（重启后可恢复已落盘记录）；未报告用量的轮次显示为「未知」。</p>
+        </div>
+      </section>
+
       <section class="card quota-card" id="quota-card" aria-labelledby="quota-heading">
         <div class="card-head">
           <div class="card-title">
