@@ -11,7 +11,7 @@
 
 通过 Google 官方 `agy` 客户端内置的 ACP（Agent Client Protocol）协议，把 Antigravity 模型安全、稳定地接入 AstrBot，作为日常对话主力。
 
-> 💡 **主分支更新**：修复宿主工具执行超时后的迟到回填和步数用尽后的收尾。匹配原会话、宿主运行与工具调用的结果可用于一次无工具总结。当前版本见 [metadata.yaml](metadata.yaml)，可下载下方主分支 ZIP 或 Release 纯净包，安装后重载插件。详见 [#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) 和 [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)。
+> 💡 **主分支 v0.9.0（2026-11-28）**：修复模型调用看图类工具后，回复与图片无关或直接掉到备用模型（`TOOL_HISTORY`）的问题——宿主会在工具结果后再追加一条图片消息，旧版把它当作被改写的历史；现在带图的续轮正常完成，工具结果里的图片也会经 MCP 回传给官方 CLI（[#48](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/48) / [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49)）。同时修复每日用量热力图的悬停抽动与月标重叠，监控页新增可折叠的「历史调用记录」面板（[PR #51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51)）。升级时请确认 `media_roots` 包含宿主落盘图片的目录（Docker 默认 `/AstrBot/data/temp`），否则自动附图会整轮 fallback。可通过下方主分支 ZIP 或最新 Release 纯净包安装并重载插件，完整记录见 [CHANGELOG](CHANGELOG.md#0902026-11-28)。
 
 ---
 
