@@ -36,38 +36,39 @@ jobs:
       - name: Setup view interaction regressions
         run: node --test tests/setup.test.mjs
 
-  release_v086:
+  release_v090:
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'release: v0.8.6 late tool results after timeout & max-step finalization'
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'release: v0.9.0 tool-image continuation, MCP image results and turn history panel'
     needs: [test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Package and publish v0.8.6
+      - name: Package and publish v0.9.0
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fx 'version: 0.8.6' metadata.yaml
-          grep -Fx 'PLUGIN_VERSION = "0.8.6"' agy_provider/_version.py
-          asset=astrbot_plugin_antigravity_acp_v0.8.6.zip
+          grep -Fx 'version: 0.9.0' metadata.yaml
+          grep -Fx 'PLUGIN_VERSION = "0.9.0"' agy_provider/_version.py
+          asset=astrbot_plugin_antigravity_acp_v0.9.0.zip
           git archive --format=zip --prefix=astrbot_plugin_antigravity_acp/ -o "$asset" "$GITHUB_SHA"
           unzip -t "$asset"
           for f in index.html app.js style.css; do unzip -Z1 "$asset" | grep -Fx "astrbot_plugin_antigravity_acp/views/setup/$f"; done
           if unzip -Z1 "$asset" | grep -E '/views/setup/assets/|/frontend/|/tests/|/docs/'; then exit 1; fi
-          cat > /tmp/v086-notes.md <<'NOTES'
-          ## v0.8.6 — 工具执行超时后的迟到结果重建与步数收尾修复（#45 / #46）
+          cat > /tmp/v090-notes.md <<'NOTES'
+          ## v0.9.0 — 带图工具结果续轮、MCP 图片回传与历史调用记录面板（#48 / #49 · #51）
 
-          - 宿主工具执行超过 `tool_execution_timeout` 后，晚带回的闭合工具结果不再被当作过期回填抛 `TOOL_STALE`。原 ACP 会话仍存活、同一宿主运行、历史前缀与原工具调用完全匹配且结果未提交过时，结果按文本历史送入一次无工具生成，得到基于已完成工具的回答。
-          - 任一条件不满足时返回 `TOOL_TIMEOUT`（禁止重试与 fallback），不再误报「进程重载」；真正的进程重载或过期回填仍返回 `TOOL_STALE`。
-          - 跑满 `max_steps` 后的收尾请求以文本历史重建、不带工具，不再抛 `TOOL_CONTEXT`；跨运行、改写或重复的回填仍被拒绝。
+          - 工具返回图片后，宿主会在工具结果后再追加一条图片消息。旧版把它当作被改写的历史并抛 `TOOL_HISTORY`，整轮切到 fallback，用户收到与图片无关的回复；现在带图续轮正常完成，标注与缓存路径仍须逐一匹配，不匹配照旧拒绝。
+          - 工具结果里的图片经 MCP `tools/call` 的 `image` 块交给官方 CLI；CLI 不支持图片时只送文本。同步修正续轮判定、同图去重配对，并保留迟到结果拦截。
+          - 每日用量热力图修复悬停抽动与月标重叠；监控页新增可折叠「历史调用记录」面板，展开时按需读取新增只读接口 `GET monitor/turns`（管理员鉴权、脱敏、不触发模型请求）。
+          - 升级须知：`media_roots` 需包含宿主落盘图片的目录（Docker 默认 `/AstrBot/data/temp`），否则自动附图等本地图片会报 `IMAGE_PATH` 并整轮 fallback。
 
-          [Issue #45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) · [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46) · [PR CI](https://github.com/sl251/astrbot_plugin_antigravity_acp/actions/runs/45871142042)
+          [Issue #48](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/48) · [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49) · [PR #51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51) · 完整记录见 [CHANGELOG.md](https://github.com/sl251/astrbot_plugin_antigravity_acp/blob/v0.9.0/CHANGELOG.md)
 
-          PR #46 的 Ubuntu/Windows × Python 3.11/3.12 CI 全部通过；另用 AstrBot 4.29.4 的 runner 原文离线跑同一套 372 项通过，并已在一台 Linux Docker / AstrBot 4.29.4 实机部署、webchat 一轮验证。线上触发该问题的长工具场景未在实机复现；当时「插件记录为不允许 fallback、宿主仍切到 fallback」的差异尚未查明。支持 AstrBot >=4.29.4,<4.30、Python 3.11+；可回退 v0.8.5，无新增配置或数据迁移。
+          PR #49 与 PR #51 的 Ubuntu/Windows × Python 3.11/3.12 CI 全部通过；合并后离线回归 Python 389 项（17 项按平台跳过）与 Node 47 项通过。#49 的运行时代码已在 Linux Docker / AstrBot 4.29.4 / 官方 CLI 实机以 webchat 复现并确认修复。未验证：工具真正返回图片时 MCP `image` 块送达 CLI 的路径（仅离线覆盖）；#51 的接口与面板未在实机验收；Windows、macOS 与 AstrBot 4.30。支持 AstrBot >=4.29.4,<4.30、Python 3.11+；无数据迁移，可回退 v0.8.6。
           NOTES
-          printf '\nCI: %s/%s/actions/runs/%s\n\nSHA-256: %s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(sha256sum "$asset" | cut -d' ' -f1)" >> /tmp/v086-notes.md
-          gh release create v0.8.6 "$asset" --target "$GITHUB_SHA" --title "v0.8.6" --notes-file /tmp/v086-notes.md --latest
+          printf '\nCI: %s/%s/actions/runs/%s\n\nSHA-256: %s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(sha256sum "$asset" | cut -d' ' -f1)" >> /tmp/v090-notes.md
+          gh release create v0.9.0 "$asset" --target "$GITHUB_SHA" --title "v0.9.0" --notes-file /tmp/v090-notes.md --latest

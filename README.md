@@ -111,6 +111,8 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
   - QQ 私聊中 `/new` 正常、`/agy cost` 被当成聊天时，请在该会话实际使用的 AstrBot 配置「可用插件」中勾选 `astrbot_plugin_antigravity_acp` 并保存，再发 `/agy help`。
 - **工具跑得久之后出现 `TOOL_STALE` / `TOOL_TIMEOUT`，或回复与工具结果无关**：确认已加载含 #45 修复的版本。宿主迟到的工具结果满足会话与原调用校验时可用于一次无工具生成，禁止重发工具。详见[宿主工具执行超时后的回填](docs/troubleshooting.md#宿主工具执行超时后的回填)。
 - **同一会话连续出现 `history_rewrite`**：升级至含 #33 修复的 v0.8.2 后，在同一会话连续发送消息，检查后续轮是否显示 `reused=true`。真实历史编辑等情况仍会触发重建。详情见 [会话复用排障](docs/troubleshooting.md#会话复用与历史重写)。
+- **工具回看图片后回复与图片无关，日志有 `TOOL_HISTORY` 并切到 fallback**：升级至含 #48 修复的 v0.9.0。宿主会在工具结果后追加一条图片消息，旧版把它当作被改写的历史。带图续轮仍要求标注与缓存路径逐一匹配，不匹配时照旧拒绝。
+- **带图消息报 `IMAGE_PATH 图片不在已授权媒体目录内`**：`media_roots` 未包含该图片所在的本地目录。宿主会把附加图片块（含其他插件注入的自动附图）落盘到 AstrBot 的 `data/temp`，Docker 下即 `/AstrBot/data/temp`，需加入 `media_roots` 后重载插件；QQ 直接发送的 http 图片走下载分支，不受此限（[#50](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/50)）。
 
 ---
 
@@ -118,12 +120,12 @@ git clone --branch main https://github.com/sl251/astrbot_plugin_antigravity_acp.
 
 *(完整历史见 [`CHANGELOG.md`](./CHANGELOG.md))*
 
+- **v0.9.0**：带图工具结果的续轮不再误报 `TOOL_HISTORY`（#48 · [PR #49](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/49)），工具结果里的图片经 MCP 回传给官方 CLI；每日用量热力图修复悬停抽动与月标重叠，监控页新增可折叠「历史调用记录」面板与只读接口 `GET monitor/turns`（[PR #51](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/51)）。
 - **v0.8.6**：工具执行超时后晚带回的结果在会话、运行与历史都匹配时重建一次无工具生成，不再抛 `TOOL_STALE` 或切到 fallback；不匹配时返回 `TOOL_TIMEOUT`。跑满步数后的收尾请求不再报 `TOOL_CONTEXT`（[#45](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/45) · [PR #46](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/46)）。
 - **v0.8.5**：额度按需自动刷新、60 秒缓存与失败冷却；新增有界 SQLite 监控明细持久化（24 小时、每实例最多 100 轮），重载后恢复请求、耗时、Token 与复用统计，存储异常时降级为内存统计（[#43](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/43) · [PR #44](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/44)）。
 - **v0.8.4**：新增独立「工具权限」页签（`setup/tool-policy`）、官方 CLI 账号额度查询（`setup/quota-refresh` / `monitor/quota`）与本地每日用量热力图（`monitor/daily/*`），精简工具权限说明、汉化额度窗口与折叠长列表并重构 `/agy` 管理员指令可读性（[#38](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/38) · [PR #39](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/39)）；完成 CLI `1.5.18` 原生工具协议实测，开放 `read_file` 至 `1.5.18` 与只读分页校验，解除原生工具对宿主 MCP 非空的依赖并修正非搜索拒止文案（[#41](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/41) · [PR #42](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/42)）。
 - **v0.8.3**：重构「运行监控 / 模型管理 / 环境与认证」三标签页、新增原位编辑（`provider-update`）与配置漂移修复（`provider-repair`）、支持受控默认迁移及思考「跟随全局」明示（[#36](https://github.com/sl251/astrbot_plugin_antigravity_acp/issues/36) · [PR #37](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/37)）。
 - **v0.8.2**：修复临时用户文本导致的会话误重建，覆盖普通续聊及工具回填。[#35](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/35)
-- **v0.8.1**：替换为 feat/ui-redesign 原生可视化前端，兼容监控 v2 与复制降级，保留 v0.8.0 后端。
 - **v0.8.0**：原生 Dashboard 重构、默认模型路由核对、当前用户输入与历史分离、历史图片预算修复、无正文且未交接工具时的安全 fallback、持久失败诊断（[#34](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/34)）。
 - **v0.7.5**：修复设置面板复制按钮在 sandbox iframe + 非 HTTPS 下全部失效（#28）——三级降级复制、按钮就地反馈、授权链接「在新标签打开」；轮询差量渲染与 5/10/20/30s 退避、bfcache 恢复、监控重建签名跳过、浅色对比度达 AA、三态主题持久化等 21 项 UI 修正（[#29](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/29)）。
 - **v0.7.4**：修复会话重建时历史窗口图片被重复提取为当前轮附件（#24）——仅当前最新用户消息的图片随请求附带，历史图在转录中保留哈希占位；跨轮重发同图不被误去重，预算裁剪不丢当前轮图片；当时仍会预检历史图片（该限制在 v0.8.0 修复）；新增 8 项单元回归与 3 项会话级集成测试（[#25](https://github.com/sl251/astrbot_plugin_antigravity_acp/pull/25)）。
